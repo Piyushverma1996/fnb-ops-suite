@@ -81,9 +81,12 @@ export default function Home() {
     try {
       const bank = await parseBankStatement(bankFile);
       const bc = await parseBCLedger(bcFile, outlet || undefined);
-      const from = new Date(dateFrom);
-      const to = new Date(dateTo);
-      to.setHours(23, 59, 59);
+      // Parse YYYY-MM-DD as local midnight so they line up with parsed
+      // cell dates (which are also normalised to local midnight).
+      const [fy, fm, fd] = dateFrom.split("-").map(Number);
+      const [ty, tm, td] = dateTo.split("-").map(Number);
+      const from = new Date(fy, fm - 1, fd);
+      const to = new Date(ty, tm - 1, td, 23, 59, 59);
       const bankF = bank.filter(b => b.date >= from && b.date <= to);
       const bcF = bc.filter(c => c.postingDate >= from && c.postingDate <= to);
       if (bankF.length === 0) {

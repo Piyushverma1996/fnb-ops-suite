@@ -148,7 +148,22 @@ function round2(n: number): number {
 
 function parseDate(v: unknown): Date | null {
   if (v == null) return null;
-  if (v instanceof Date) return v;
+  if (v instanceof Date) {
+    // xlsx returns Excel date cells as JS Dates whose UTC time-of-day equals the
+    // host TZ offset (so an Excel "31-Mar-2026" becomes 2026-03-30T18:29:50Z in
+    // IST). Round to nearest UTC day, then rebuild as local midnight so the
+    // calendar date matches what was visually entered in Excel.
+    const ms = v.getTime();
+    const rounded = Math.round(ms / 86400000) * 86400000;
+    const u = new Date(rounded);
+    return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+  }
+  // Excel serial number (when cellDates is off or library returns raw)
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const ms = (v - 25569) * 86400000;
+    const u = new Date(ms);
+    return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+  }
   const s = String(v).trim();
   // DD/MM/YY or DD/MM/YYYY
   let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);

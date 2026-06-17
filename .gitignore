@@ -68,6 +68,10 @@ Posted Sales Invoices*
 **/upload_discount/
 **/Growth Reports*
 
+# Snapshot fixtures (regression baselines reference local source data)
+tools/bank-reco/scripts/*.json
+tools/bank-reco/scripts/debug-*.mts
+
 # Logs
 *.log
 

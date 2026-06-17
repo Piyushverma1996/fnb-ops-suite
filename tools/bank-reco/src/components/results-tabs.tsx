@@ -10,7 +10,7 @@ const TABS = [
   { id: "ub",       label: "Unmatched Bank" },
   { id: "uc",       label: "Unmatched BC" },
   { id: "summary",  label: "Daily Summary" },
-  { id: "guide",    label: "BC Match Guide" },
+  { id: "guide",    label: "Action Plan" },
 ] as const;
 
 type TabId = typeof TABS[number]["id"];
@@ -227,7 +227,7 @@ function GuideTable({ result }: { result: MatchResult }) {
   return (
     <div>
       <div className="mb-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-sm text-blue-900 dark:text-blue-100 border border-blue-200 dark:border-blue-900">
-        <strong>How to use in BC:</strong> Open <em>Bank Account Reconciliations</em>. For each row below, find the bank statement line by Date + Amount, click <em>Match Manually</em>, and tick the BC Doc Nos listed.
+        <strong>How to use:</strong> Download the Excel report → open the <em>1 Action Plan</em> sheet (numbered, chronological). For each row, open the matching bank statement line in BC&apos;s <em>Bank Account Reconciliation</em>, tick the BC Doc Nos listed, and mark the &quot;Done&quot; column. The <em>2 BC Stmt Import</em> sheet contains the bank statement in BC&apos;s import format if you want to skip the manual statement upload step.
       </div>
       <TableShell>
         <thead><tr>

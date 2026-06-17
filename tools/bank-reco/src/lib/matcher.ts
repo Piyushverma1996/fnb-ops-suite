@@ -114,6 +114,8 @@ export function classifyBC(desc: string): BCCategory {
   if (d.includes("CARD GROUP") && d.includes("AMERICAN")) return "AMEX";
   if (d.includes("CARD GROUP")) return "CARD_SETTLEMENT";
   if (d.includes("AMERICAN") && d.includes("CARD")) return "AMEX";
+  // Some PBR descriptions use "TERMINAL ... CARDS SETTL." instead of "Card Group".
+  if (d.includes("CARDS SETTL")) return "CARD_SETTLEMENT";
   if (d.includes("SWIGGY")) return "SWIGGY";
   if (d.includes("ZOMATO")) return "ZOMATO";
   if (d.includes("DINEOUT")) return "DINEOUT";

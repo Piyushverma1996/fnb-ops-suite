@@ -70,7 +70,9 @@ Posted Sales Invoices*
 
 # Snapshot fixtures (regression baselines reference local source data)
 tools/bank-reco/scripts/*.json
+tools/bank-reco/scripts/*.xlsx
 tools/bank-reco/scripts/debug-*.mts
+tools/bank-reco/scripts/analyze-*.mts
 
 # Logs
 *.log

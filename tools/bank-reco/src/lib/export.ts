@@ -10,11 +10,24 @@
  *   6. "6 All Matches"   — raw match detail with narration + descriptions
  */
 import * as XLSX from "xlsx";
-import type { MatchResult, Match } from "./matcher";
+import type { MatchResult, Match, BankEntry } from "./matcher";
 import { saveAs } from "file-saver";
 
-export function downloadReport(result: MatchResult, outletCode: string, dateFrom: string, dateTo: string) {
+export function downloadReport(
+  result: MatchResult,
+  outletCode: string,
+  dateFrom: string,
+  dateTo: string,
+  bank: BankEntry[] = [],
+) {
   const wb = XLSX.utils.book_new();
+
+  // Statement balances (for the BC reconciliation header fields)
+  const bankSorted = [...bank].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const first = bankSorted[0];
+  const last  = bankSorted[bankSorted.length - 1];
+  const openingBalance = first ? round2(first.balance - first.amount) : 0;
+  const endingBalance  = last  ? round2(last.balance) : 0;
 
   // Sort matches chronologically with stable tie-break by amount
   const ordered = [...result.matches].sort((a, b) => {
@@ -22,6 +35,43 @@ export function downloadReport(result: MatchResult, outletCode: string, dateFrom
     if (t !== 0) return t;
     return b.bankAmount - a.bankAmount;
   });
+
+  // ───── Sheet 0: How to Use ─────
+  const howTo = [
+    ["BANK RECONCILIATION — STEP BY STEP"],
+    [`Outlet: ${outletCode}    Period: ${dateFrom} → ${dateTo}`],
+    [],
+    ["VALUES TO TYPE INTO BC RECONCILIATION HEADER"],
+    ["Field", "Value"],
+    ["Bank Account No.",           "(pick the HDFC account for this outlet)"],
+    ["Statement No.",              "(next sequential, e.g. 04/26 for April 2026)"],
+    ["Statement Date",             dateTo],
+    ["Balance Last Statement",     openingBalance],
+    ["Statement Ending Balance",   endingBalance],
+    [],
+    ["WORKFLOW"],
+    ["#", "Step", "Where", "Time"],
+    [1, "Open BC → Bank Acc. Reconciliations → New",                                "BC",      "10 sec"],
+    [2, "Fill the 5 header fields above (see Sheet 5 Summary for daily detail)",    "BC",      "30 sec"],
+    [3, "Click into the empty Bank Statement Lines grid (first row, first cell)",   "BC",      "5 sec"],
+    [4, "Open Sheet 2 (BC Stmt Import), select rows 2 onwards (all data, NOT header)", "Excel", "5 sec"],
+    [5, "Copy (Ctrl+C) → switch to BC → Paste (Ctrl+V) — grid fills automatically", "BC",      "10 sec"],
+    [6, "Click Matching → Match Automatically. BC matches what it can.",            "BC",      "15 sec"],
+    [7, "Open Sheet 1 (Action Plan) — these are matches BC's auto-match may miss",  "Excel",   "—"],
+    [8, "For each row in Action Plan: in BC click that statement line → Matching → Match Manually → tick the BC Doc Nos listed → tick Done column in Excel", "Both", "~1 sec/row"],
+    [9, "Sheet 3 (Unmatched Bank) → create new BR vouchers in BC for these",        "BC",      "varies"],
+    [10, "Sheet 4 (Unmatched BC) → investigate (usually cross-month timing)",       "BC",      "varies"],
+    [11, "When Total Difference = 0 → Post the reconciliation",                     "BC",      "5 sec"],
+    [],
+    ["TIPS"],
+    ["·  T1 = 100% confidence (same date, same amount). Tick without checking."],
+    ["·  T2 = many BC docs sum to one bank line (still 95%+ confidence)."],
+    ["·  T3/T4 = date-tolerant. Quick sanity check before ticking."],
+    ["·  The Done column is just for your tracking — Excel doesn't push back to BC."],
+  ];
+  const sheet0 = XLSX.utils.aoa_to_sheet(howTo);
+  applyColWidths(sheet0, [6, 70, 12, 12]);
+  XLSX.utils.book_append_sheet(wb, sheet0, "0 How to Use");
 
   // ───── Sheet 1: Action Plan ─────
   const actionPlanRows = ordered.map((m, i) => ({
@@ -94,6 +144,11 @@ export function downloadReport(result: MatchResult, outletCode: string, dateFrom
     ["Bank Reconciliation Report"],
     [`Outlet: ${outletCode}    Period: ${dateFrom} → ${dateTo}`],
     [],
+    ["BC Reconciliation Header values"],
+    ["Statement Date",            dateTo],
+    ["Balance Last Statement",    openingBalance],
+    ["Statement Ending Balance",  endingBalance],
+    [],
     [
       "Bank Entries",
       "BC Entries",
@@ -151,6 +206,10 @@ export function downloadReport(result: MatchResult, outletCode: string, dateFrom
   const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   saveAs(blob, `BankReco_${outletCode}_${dateFrom}_${dateTo}.xlsx`);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function fmtDate(d: Date): string {

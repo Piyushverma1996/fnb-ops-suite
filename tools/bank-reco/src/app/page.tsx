@@ -12,7 +12,7 @@ import {
   parseBankStatement, parseBCLedger,
   sniffBCLedger, sniffBankStatement, type BCMeta,
 } from "@/lib/parsers";
-import { runMatch, type MatchResult } from "@/lib/matcher";
+import { runMatch, type MatchResult, type BankEntry } from "@/lib/matcher";
 import { downloadReport } from "@/lib/export";
 
 export default function Home() {
@@ -34,6 +34,7 @@ export default function Home() {
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<MatchResult | null>(null);
+  const [filteredBank, setFilteredBank] = useState<BankEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Sniff BC when uploaded
@@ -104,6 +105,7 @@ export default function Home() {
         maxComponents: maxComp,
       });
       setResult(res);
+      setFilteredBank(bankF);
       // Scroll to results
       setTimeout(() => document.getElementById("results")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
     } catch (e: unknown) {
@@ -286,7 +288,7 @@ export default function Home() {
                   {result.matches.length} match{result.matches.length === 1 ? "" : "es"} across 4 tiers · {result.unmatchedBank.length} bank + {result.unmatchedBC.length} BC entries to review manually
                 </p>
                 <button
-                  onClick={() => downloadReport(result, outlet, dateFrom, dateTo)}
+                  onClick={() => downloadReport(result, outlet, dateFrom, dateTo, filteredBank)}
                   className="inline-flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
                 >
                   <Download className="h-4 w-4" /> Download Excel Report

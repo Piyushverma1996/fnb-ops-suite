@@ -77,8 +77,23 @@ const bank = bank0.filter(b => b.date >= from && b.date <= to).map((b, i) => ({ 
 const bc   = bc0.filter(c => c.postingDate >= from && c.postingDate <= to).map((c, i) => ({ ...c, id: i }));
 const result = runMatch(bank, bc, { dateToleranceDays: 2, amountTolerance: 1.0, maxComponents: 15 });
 
+const bankSorted = [...bank].sort((a, b) => a.date.getTime() - b.date.getTime());
+const opening = bankSorted.length ? round2(bankSorted[0].balance - bankSorted[0].amount) : 0;
+const ending  = bankSorted.length ? round2(bankSorted[bankSorted.length - 1].balance) : 0;
+console.log(`Opening balance: ${opening}, Ending balance: ${ending}`);
+
 // Replicate export.ts logic without saveAs (which is browser-only)
 const wb = XLSX.utils.book_new();
+const howTo = [
+  ["BANK RECONCILIATION — STEP BY STEP"],
+  [`Outlet: ${branch}    Period: ${fromStr} → ${toStr}`],
+  [],
+  ["BC HEADER VALUES"],
+  ["Statement Date", toStr],
+  ["Balance Last Statement", opening],
+  ["Statement Ending Balance", ending],
+];
+XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(howTo), "0 How to Use");
 const ordered = [...result.matches].sort((a, b) => {
   const t = a.bankDate.getTime() - b.bankDate.getTime();
   if (t !== 0) return t;

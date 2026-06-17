@@ -54,6 +54,52 @@ export async function parseBankStatement(file: File): Promise<BankEntry[]> {
   return entries;
 }
 
+/** Quick metadata sniff: list distinct branch codes + posting-date range. */
+export type BCMeta = {
+  branches: { code: string; count: number }[];
+  minDate: Date | null;
+  maxDate: Date | null;
+  totalRows: number;
+};
+
+export async function sniffBCLedger(file: File): Promise<BCMeta> {
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array", cellDates: true });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null });
+  const counts = new Map<string, number>();
+  let minD: Date | null = null;
+  let maxD: Date | null = null;
+  let total = 0;
+  for (const row of rows) {
+    const pd = row["Posting Date"];
+    if (!pd) continue;
+    const date = parseDate(pd);
+    if (!date) continue;
+    total++;
+    if (!minD || date < minD) minD = date;
+    if (!maxD || date > maxD) maxD = date;
+    const code = row["Branch Code"] ? String(row["Branch Code"]).toUpperCase().trim() : "";
+    if (code) counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  const branches = [...counts.entries()]
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count);
+  return { branches, minDate: minD, maxDate: maxD, totalRows: total };
+}
+
+/** Quick sniff of bank statement: just the date range. */
+export async function sniffBankStatement(file: File): Promise<{ minDate: Date | null; maxDate: Date | null; rows: number }> {
+  const entries = await parseBankStatement(file);
+  if (entries.length === 0) return { minDate: null, maxDate: null, rows: 0 };
+  let min = entries[0].date, max = entries[0].date;
+  for (const e of entries) {
+    if (e.date < min) min = e.date;
+    if (e.date > max) max = e.date;
+  }
+  return { minDate: min, maxDate: max, rows: entries.length };
+}
+
 export async function parseBCLedger(file: File, branchFilter?: string): Promise<BCEntry[]> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });

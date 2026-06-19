@@ -81,7 +81,9 @@ export function downloadReport(
     "Bank Amount": m.bankAmount,
     "Dir": m.direction === "Credit" ? "CR" : "DR",
     "Tier": m.tier,
-    "BC Doc(s) to Apply": m.bcDocs,
+    "BC Doc(s) to Apply": m.tier === "T5" && m.settlement
+      ? `Create BR voucher: Net ₹${m.settlement.netPayout.toFixed(2)} (${m.settlement.aggregator} UTR ${m.settlement.utr})`
+      : m.bcDocs,
     "Type": humanCategory(m.category),
     "Bank line (for reference)": shortenNarration(m.bankNarration),
   }));
@@ -187,6 +189,39 @@ export function downloadReport(
   const sheet5 = XLSX.utils.aoa_to_sheet(summaryHeader);
   applyColWidths(sheet5, [16, 16, 16, 16, 16, 12, 12]);
   XLSX.utils.book_append_sheet(wb, sheet5, "5 Summary");
+
+  // ───── Aggregator Settlements (T5) — extra sheet if any ─────
+  const t5 = ordered.filter(m => m.tier === "T5" && m.settlement);
+  if (t5.length > 0) {
+    const t5Rows = t5.map((m, i) => {
+      const s = m.settlement!;
+      const gap = m.bankAmount - s.netPayout;
+      const period = s.periodStart && s.periodEnd
+        ? `${fmtDate(s.periodStart)} → ${fmtDate(s.periodEnd)}` : "";
+      return {
+        "#": i + 1,
+        "Done": "",
+        "Bank Date": fmtDate(m.bankDate),
+        "Bank Amount": m.bankAmount,
+        "Aggregator": s.aggregator,
+        "Bank UTR": s.utr,
+        "Settlement Period": period,
+        "Orders": s.orderCount,
+        "Gross sales (book as Revenue)": s.grossSales,
+        "Commission + fees (book as Expense)": s.totalCommission,
+        "GST on commission (book as GST input)": s.totalGstFees,
+        "TCS (book as TCS receivable)": s.totalTcs,
+        "TDS (book as TDS receivable)": s.totalTds,
+        "Net Payout (per settlement file)": s.netPayout,
+        "Δ vs Bank": round2(gap),
+        "Notes": Math.abs(gap) > 100 ? "Verify deductions — significant gap" : "",
+        "Source file": s.aggregator + " settlement",
+      };
+    });
+    const s7 = XLSX.utils.json_to_sheet(t5Rows);
+    applyColWidths(s7, [4, 7, 12, 13, 11, 22, 22, 7, 16, 16, 16, 14, 14, 16, 11, 32, 18]);
+    XLSX.utils.book_append_sheet(wb, s7, "7 Aggregator Settlements");
+  }
 
   // ───── Sheet 6: All Matches (raw detail) ─────
   const allMatchedRows = ordered.map(m => ({

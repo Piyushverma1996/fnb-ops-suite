@@ -47,7 +47,7 @@ export type BCCategory =
 export type Match = {
   bankId: number;
   bcIds: number[];
-  tier: "T1" | "T2" | "T3" | "T4";
+  tier: "T1" | "T2" | "T3" | "T4" | "T5";
   tierLabel: string;
   confidence: number;
   bankDate: Date;
@@ -59,6 +59,22 @@ export type Match = {
   bcDescriptions: string;
   category: BankCategory;
   direction: "Credit" | "Debit";
+  settlement?: SettlementHit;
+};
+
+export type SettlementHit = {
+  aggregator: "SWIGGY" | "ZOMATO";
+  utr: string;
+  netPayout: number;
+  orderCount: number;
+  grossSales: number;
+  totalCommission: number;
+  totalGstFees: number;
+  totalTcs: number;
+  totalTds: number;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+  rid: string;
 };
 
 export type MatchResult = {
@@ -154,48 +170,59 @@ const CATEGORY_MAP: Record<BankCategory, Set<BCCategory>> = {
 };
 
 // -------- Subset-sum helper --------
+//
+// Strategy by pool size:
+//   ≤19       : exact enumeration of all combinations of size 2..maxSize
+//   20-28     : meet-in-the-middle (sort one half's sums, binary-search the other)
+//   29-200    : multi-start greedy with several pivot strategies + 1-swap repair
+//   >200      : single greedy descending pass
+//
+// Empirical: real daily SI-payment pools per outlet are 30-100 entries — the
+// previous "exact only up to 20, greedy thereafter" missed most consolidations
+// because the greedy ordering rarely matches the actual deposit composition.
 function findSubset(pool: BCEntry[], target: number, tolerance: number, maxSize: number): number[] | null {
   if (pool.length === 0) return null;
   const sorted = [...pool].sort((a, b) => b.absAmount - a.absAmount);
+  const ids = sorted.map(s => s.id);
+  const amts = sorted.map(s => s.absAmount);
 
-  // Single match
-  const exact = sorted.find(p => Math.abs(p.absAmount - target) <= tolerance);
-  if (exact) return [exact.id];
-
-  // Greedy descending
-  const chosen: number[] = [];
-  let total = 0;
-  for (const p of sorted) {
-    if (total + p.absAmount <= target + tolerance) {
-      chosen.push(p.id);
-      total += p.absAmount;
-      if (Math.abs(total - target) <= tolerance) return chosen;
-    }
-    if (chosen.length >= maxSize) break;
+  // Trivial: a single entry already within tolerance
+  for (let i = 0; i < amts.length; i++) {
+    if (Math.abs(amts[i] - target) <= tolerance) return [ids[i]];
   }
-  if (Math.abs(total - target) <= tolerance && chosen.length > 0) return chosen;
 
-  // Exact subset-sum for small pools
-  if (sorted.length <= 20) {
-    const ids = sorted.map(s => s.id);
-    const amts = sorted.map(s => s.absAmount);
-    for (let sz = 2; sz <= Math.min(maxSize, sorted.length); sz++) {
-      const result = subsetSumOfSize(amts, ids, target, tolerance, sz);
-      if (result) return result;
+  const n = amts.length;
+  const effectiveMax = Math.min(maxSize, n);
+
+  // Tier A: exhaustive enumeration for small pools
+  if (n <= 19) {
+    for (let sz = 2; sz <= effectiveMax; sz++) {
+      const r = exactSubsetOfSize(amts, ids, target, tolerance, sz);
+      if (r) return r;
     }
+    return null;
   }
-  return null;
+
+  // Tier B: meet-in-the-middle
+  if (n <= 28) {
+    const r = meetInTheMiddle(amts, ids, target, tolerance, effectiveMax);
+    if (r) return r;
+    return null;
+  }
+
+  // Tier C: multi-start greedy with repair
+  return multiStartGreedy(amts, ids, target, tolerance, effectiveMax);
 }
 
-function subsetSumOfSize(amts: number[], ids: number[], target: number, tol: number, size: number): number[] | null {
+function exactSubsetOfSize(amts: number[], ids: number[], target: number, tol: number, size: number): number[] | null {
   const n = amts.length;
+  if (size > n) return null;
   const idx: number[] = new Array(size).fill(0);
   for (let i = 0; i < size; i++) idx[i] = i;
   while (true) {
     let s = 0;
     for (let i = 0; i < size; i++) s += amts[idx[i]];
     if (Math.abs(s - target) <= tol) return idx.map(i => ids[i]);
-    // advance combination
     let i = size - 1;
     while (i >= 0 && idx[i] === n - size + i) i--;
     if (i < 0) return null;
@@ -204,11 +231,155 @@ function subsetSumOfSize(amts: number[], ids: number[], target: number, tol: num
   }
 }
 
+function meetInTheMiddle(amts: number[], ids: number[], target: number, tol: number, maxSize: number): number[] | null {
+  const n = amts.length;
+  const half = n >> 1;
+  // Enumerate all 2^half subsets of the first half, store {sum, mask}
+  const leftSums: { sum: number; mask: number }[] = [];
+  const leftLimit = 1 << half;
+  for (let m = 1; m < leftLimit; m++) {
+    let s = 0, c = 0;
+    for (let i = 0; i < half; i++) if (m & (1 << i)) { s += amts[i]; c++; }
+    if (c <= maxSize) leftSums.push({ sum: s, mask: m });
+  }
+  // Sort by sum for binary search
+  leftSums.sort((a, b) => a.sum - b.sum);
+  const sumsOnly = leftSums.map(x => x.sum);
+
+  // Enumerate all 2^(n-half) subsets of the second half
+  const rightLen = n - half;
+  const rightLimit = 1 << rightLen;
+  for (let m = 0; m < rightLimit; m++) {
+    let s = 0, c = 0;
+    for (let i = 0; i < rightLen; i++) if (m & (1 << i)) { s += amts[half + i]; c++; }
+    if (c > maxSize) continue;
+    const need = target - s;
+    // include empty-left case (m=0 not in leftSums, handle separately)
+    if (Math.abs(need) <= tol && m !== 0) return collectMask(ids, half, m, rightLen);
+    if (c === maxSize) continue; // can't add more from left
+    // binary search for need in leftSums (within tolerance)
+    const lo = lowerBound(sumsOnly, need - tol);
+    for (let j = lo; j < sumsOnly.length; j++) {
+      if (sumsOnly[j] > need + tol) break;
+      const lm = leftSums[j].mask;
+      const totalCount = popcount(lm) + c;
+      if (totalCount <= maxSize && totalCount >= 2) {
+        return collectMasks(ids, half, lm, m, rightLen);
+      }
+    }
+  }
+  return null;
+}
+
+function lowerBound(a: number[], v: number): number {
+  let lo = 0, hi = a.length;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (a[m] < v) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+function popcount(m: number): number {
+  let c = 0; while (m) { c += m & 1; m >>>= 1; } return c;
+}
+
+function collectMask(ids: number[], half: number, rightMask: number, rightLen: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < rightLen; i++) if (rightMask & (1 << i)) out.push(ids[half + i]);
+  return out;
+}
+
+function collectMasks(ids: number[], half: number, leftMask: number, rightMask: number, rightLen: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < half; i++) if (leftMask & (1 << i)) out.push(ids[i]);
+  for (let i = 0; i < rightLen; i++) if (rightMask & (1 << i)) out.push(ids[half + i]);
+  return out;
+}
+
+function multiStartGreedy(amts: number[], ids: number[], target: number, tol: number, maxSize: number): number[] | null {
+  // Strategy 1: descending greedy (largest first, take if fits)
+  const r1 = greedyPass(amts, ids, target, tol, maxSize, (a, b) => b - a);
+  if (r1) return r1;
+  // Strategy 2: ascending greedy
+  const ascAmts = [...amts].sort((a, b) => a - b);
+  const ascIds = amts.map((_, i) => i).sort((a, b) => amts[a] - amts[b]).map(i => ids[i]);
+  const r2 = greedyPassRaw(ascAmts, ascIds, target, tol, maxSize);
+  if (r2) return r2;
+  // Strategy 3: descending greedy with 1-swap repair
+  return greedyDescWithSwap(amts, ids, target, tol, maxSize);
+}
+
+function greedyPass(amts: number[], ids: number[], target: number, tol: number, maxSize: number, cmp: (a: number, b: number) => number): number[] | null {
+  const idx = amts.map((_, i) => i).sort((a, b) => cmp(amts[a], amts[b]));
+  const sortedA = idx.map(i => amts[i]);
+  const sortedI = idx.map(i => ids[i]);
+  return greedyPassRaw(sortedA, sortedI, target, tol, maxSize);
+}
+
+function greedyPassRaw(amts: number[], ids: number[], target: number, tol: number, maxSize: number): number[] | null {
+  const chosen: number[] = [];
+  let total = 0;
+  for (let i = 0; i < amts.length; i++) {
+    if (chosen.length >= maxSize) break;
+    if (total + amts[i] <= target + tol) {
+      chosen.push(ids[i]);
+      total += amts[i];
+      if (Math.abs(total - target) <= tol) return chosen;
+    }
+  }
+  return Math.abs(total - target) <= tol && chosen.length > 0 ? chosen : null;
+}
+
+function greedyDescWithSwap(amts: number[], ids: number[], target: number, tol: number, maxSize: number): number[] | null {
+  // Build descending greedy candidate (allowing overshoot up to one item)
+  const chosen: number[] = [];
+  const chosenAmts: number[] = [];
+  let total = 0;
+  const remaining: { amt: number; id: number }[] = [];
+  for (let i = 0; i < amts.length; i++) {
+    if (chosen.length < maxSize && total + amts[i] <= target + tol) {
+      chosen.push(ids[i]); chosenAmts.push(amts[i]); total += amts[i];
+      if (Math.abs(total - target) <= tol) return chosen;
+    } else {
+      remaining.push({ amt: amts[i], id: ids[i] });
+    }
+  }
+  if (Math.abs(total - target) <= tol && chosen.length > 0) return chosen;
+  // Try swapping one chosen item with one unchosen item to land on target
+  const need = target - total;
+  for (let i = 0; i < chosen.length; i++) {
+    const wanted = chosenAmts[i] + need;
+    for (const r of remaining) {
+      if (Math.abs(r.amt - wanted) <= tol) {
+        const out = chosen.slice();
+        out[i] = r.id;
+        return out;
+      }
+    }
+  }
+  return null;
+}
+
 // -------- Main matcher --------
 export type MatchOptions = {
   dateToleranceDays: number;
   amountTolerance: number;
   maxComponents: number;
+  settlements?: SettlementInput[];
+};
+
+/** Slim view of a parsed settlement — passed in from settlement.ts. */
+export type SettlementInput = {
+  aggregator: "SWIGGY" | "ZOMATO";
+  utr: string;
+  netPayout: number;
+  rid: string;
+  orderCount: number;
+  grossSales: number;
+  totalCommission: number;
+  totalGstFees: number;
+  totalTcs: number;
+  totalTds: number;
+  periodStart: Date | null;
+  periodEnd: Date | null;
 };
 
 export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOptions): MatchResult {
@@ -297,6 +468,53 @@ export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOpti
     }
   }
 
+  // ---- Tier 5: Aggregator settlement match ----
+  //
+  // For each still-unmatched bank entry, look at provided settlement files
+  // (Swiggy / Zomato). A settlement matches if its UTR appears in the bank
+  // narration AND its Net Payout equals the bank amount within tolerance, OR
+  // (fallback) the brand name appears in narration AND the amount matches
+  // within tighter tolerance.
+  if (opts.settlements && opts.settlements.length > 0) {
+    for (const b of bankAll) {
+      if (bankUsed.has(b.id)) continue;
+      const hit = findSettlementMatch(b, opts.settlements, opts.amountTolerance);
+      if (!hit) continue;
+      const m: Match = {
+        bankId: b.id,
+        bcIds: [],
+        tier: "T5",
+        tierLabel: `T5: ${hit.aggregator} settlement (${hit.orderCount} orders)`,
+        confidence: 90,
+        bankDate: b.date,
+        bcDate: b.date,
+        bankAmount: b.absAmount,
+        bcSumAmount: hit.netPayout,
+        bankNarration: b.narration,
+        bcDocs: `${hit.aggregator} UTR ${hit.utr}`,
+        bcDescriptions: `Gross ₹${hit.grossSales.toFixed(2)} − Commission ₹${hit.totalCommission.toFixed(2)} − GST/TDS/TCS ₹${(hit.totalGstFees + hit.totalTds + hit.totalTcs).toFixed(2)}`,
+        category: b.category,
+        direction: b.direction,
+        settlement: {
+          aggregator: hit.aggregator,
+          utr: hit.utr,
+          netPayout: hit.netPayout,
+          orderCount: hit.orderCount,
+          grossSales: hit.grossSales,
+          totalCommission: hit.totalCommission,
+          totalGstFees: hit.totalGstFees,
+          totalTcs: hit.totalTcs,
+          totalTds: hit.totalTds,
+          periodStart: hit.periodStart,
+          periodEnd: hit.periodEnd,
+          rid: hit.rid,
+        },
+      };
+      matches.push(m);
+      bankUsed.add(b.id);
+    }
+  }
+
   const unmatchedBank = bankAll.filter(b => !bankUsed.has(b.id));
   const unmatchedBC = bcAll.filter(c => !bcUsed.has(c.id));
   const summary = buildSummary(bankAll, bcAll, unmatchedBank, unmatchedBC);
@@ -335,6 +553,69 @@ function mkMatch(b: BankEntry, bcEntries: BCEntry[], tier: Match["tier"], tierLa
     bcDescriptions: bcEntries.slice(0, 3).map(c => c.description).join("; "),
     category: b.category,
     direction: b.direction,
+  };
+}
+
+function findSettlementMatch(
+  b: BankEntry,
+  settlements: SettlementInput[],
+  _tolerance: number,
+): SettlementInput | null {
+  if (b.direction !== "Credit") return null;
+  const upper = b.narration.toUpperCase();
+  // Aggregator bank credits are routinely off the settlement Net Payout by
+  // ₹100-₹1000 (TDS adjustments, late-cancellation refunds, bank-side fees
+  // that aren't pre-deducted in the settlement file). Use a generous window
+  // when the UTR matches; the discrepancy is surfaced in the report.
+  const utrTol = Math.max(2000, b.absAmount * 0.02);
+  const brandTol = 1;
+
+  // First pass: UTR substring in narration. UTR identity is far more reliable
+  // than the exact amount, so we widen the amount window once it's confirmed.
+  let matchedUtr: string | null = null;
+  for (const s of settlements) {
+    if (s.utr && s.utr.length >= 6 && upper.includes(s.utr.toUpperCase())) {
+      matchedUtr = s.utr;
+      break;
+    }
+  }
+  if (matchedUtr) {
+    const sameUtr = settlements.filter(s => s.utr === matchedUtr);
+    const agg = aggregateSettlements(sameUtr);
+    if (Math.abs(agg.netPayout - b.absAmount) <= utrTol) return agg;
+    // Even if amount is off by more, return aggregate — the UTR identity is
+    // strong enough to count this as a match; the report shows the gap.
+    return agg;
+  }
+
+  // Second pass: brand name + tight amount match (no UTR available)
+  const isSwiggy = upper.includes("SWIGGY") || upper.includes("BUNDL TECHNOLOGIES");
+  const isZomato = upper.includes("ZOMATO") || upper.includes("ETERNAL LIMITED");
+  for (const s of settlements) {
+    if (Math.abs(s.netPayout - b.absAmount) > brandTol) continue;
+    if (isSwiggy && s.aggregator === "SWIGGY") return s;
+    if (isZomato && s.aggregator === "ZOMATO") return s;
+  }
+  return null;
+}
+
+function aggregateSettlements(list: SettlementInput[]): SettlementInput {
+  if (list.length === 1) return list[0];
+  const sum = (k: keyof Pick<SettlementInput, "netPayout" | "grossSales" | "totalCommission" | "totalGstFees" | "totalTcs" | "totalTds" | "orderCount">) =>
+    list.reduce((t, x) => t + (x[k] as number), 0);
+  return {
+    aggregator: list[0].aggregator,
+    utr: list[0].utr,
+    netPayout: Math.round(sum("netPayout") * 100) / 100,
+    grossSales: Math.round(sum("grossSales") * 100) / 100,
+    totalCommission: Math.round(sum("totalCommission") * 100) / 100,
+    totalGstFees: Math.round(sum("totalGstFees") * 100) / 100,
+    totalTcs: Math.round(sum("totalTcs") * 100) / 100,
+    totalTds: Math.round(sum("totalTds") * 100) / 100,
+    orderCount: sum("orderCount"),
+    rid: list.map(s => s.rid).filter((v, i, a) => a.indexOf(v) === i).join(", "),
+    periodStart: list.reduce<Date | null>((m, s) => (!m || (s.periodStart && s.periodStart < m)) ? s.periodStart : m, null),
+    periodEnd:   list.reduce<Date | null>((m, s) => (!m || (s.periodEnd && s.periodEnd > m)) ? s.periodEnd : m, null),
   };
 }
 

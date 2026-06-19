@@ -6,18 +6,21 @@ import {
   Play, Loader2, Github, ChevronDown, Info, Sparkles,
 } from "lucide-react";
 import { FileDropzone } from "@/components/file-dropzone";
+import { MultiFileDropzone } from "@/components/multi-file-dropzone";
 import { StatCard } from "@/components/stat-card";
 import { ResultsTabs } from "@/components/results-tabs";
 import {
   parseBankStatement, parseBCLedger,
   sniffBCLedger, sniffBankStatement, type BCMeta,
 } from "@/lib/parsers";
-import { runMatch, type MatchResult, type BankEntry } from "@/lib/matcher";
+import { runMatch, type MatchResult, type BankEntry, type SettlementInput } from "@/lib/matcher";
+import { parseSwiggyCSV, parseZomatoXLSX } from "@/lib/settlement";
 import { downloadReport } from "@/lib/export";
 
 export default function Home() {
   const [bankFile, setBankFile] = useState<File | null>(null);
   const [bcFile, setBcFile] = useState<File | null>(null);
+  const [settlementFiles, setSettlementFiles] = useState<File[]>([]);
 
   const [bcMeta, setBcMeta] = useState<BCMeta | null>(null);
   const [bankMeta, setBankMeta] = useState<{ minDate: Date | null; maxDate: Date | null; rows: number } | null>(null);
@@ -99,10 +102,24 @@ export default function Home() {
           `No BC entries for branch "${outlet}" between ${dateFrom} and ${dateTo}. Available branches in this file: ${available}.`,
         );
       }
+      // Parse any settlement files the user dropped in
+      let settlements: SettlementInput[] = [];
+      for (const f of settlementFiles) {
+        try {
+          if (f.name.toLowerCase().endsWith(".csv")) {
+            settlements.push(...(await parseSwiggyCSV(f)));
+          } else if (f.name.toLowerCase().endsWith(".xlsx")) {
+            settlements.push(...(await parseZomatoXLSX(f)));
+          }
+        } catch (e) {
+          console.warn(`Failed to parse settlement ${f.name}`, e);
+        }
+      }
       const res = runMatch(bankF, bcF, {
         dateToleranceDays: dateTol,
         amountTolerance: amountTol,
         maxComponents: maxComp,
+        settlements: settlements.length > 0 ? settlements : undefined,
       });
       setResult(res);
       setFilteredBank(bankF);
@@ -113,7 +130,7 @@ export default function Home() {
     } finally {
       setRunning(false);
     }
-  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta]);
+  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta, settlementFiles]);
 
   const matchPct = result?.stats.matchPct ?? 0;
   const matchHealthText = useMemo(() => {
@@ -163,6 +180,18 @@ export default function Home() {
               subtitle="Bank Account Ledger Entries (.xlsx)"
               file={bcFile}
               onChange={setBcFile}
+            />
+          </div>
+          <div className="mt-3">
+            <MultiFileDropzone
+              label="Aggregator settlement files (optional)"
+              subtitle="Swiggy consolidate-annexure CSV or Zomato Settlement XLSX — unlocks T5 many-to-one matching"
+              accept={{
+                "text/csv": [".csv"],
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+              }}
+              files={settlementFiles}
+              onChange={setSettlementFiles}
             />
           </div>
           {(bankMeta || bcMeta) && (

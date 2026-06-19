@@ -134,7 +134,10 @@ const to = new Date(ty, tm - 1, td, 23, 59, 59);
 const bank = bank0.filter(b => b.date >= from && b.date <= to).map((b, i) => ({ ...b, id: i }));
 const bc   = bc0.filter(c => c.postingDate >= from && c.postingDate <= to).map((c, i) => ({ ...c, id: i }));
 
-const result = runMatch(bank, bc, { dateToleranceDays: 2, amountTolerance: 1.0, maxComponents: 15 });
+const dt = Number(process.env.DT ?? 2);
+const at = Number(process.env.AT ?? 1.0);
+const mc = Number(process.env.MC ?? 15);
+const result = runMatch(bank, bc, { dateToleranceDays: dt, amountTolerance: at, maxComponents: mc });
 
 const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 

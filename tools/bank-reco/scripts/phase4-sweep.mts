@@ -6,13 +6,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as XLSX from "xlsx";
 import { runMatch, classifyBank, classifyBC, type BankEntry, type BCEntry, type SettlementInput } from "../src/lib/matcher.ts";
-import { parseSwiggyText } from "../src/lib/settlement.ts";
+import { parseSwiggyText, parseZomatoUtrText } from "../src/lib/settlement.ts";
 
 const SWIGGY_DIR = "C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data/Aggregator settlement reports/Swiggy";
+const ZOMATO_DIR = "C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data/Aggregator settlement reports/Zomato";
 const settlements: SettlementInput[] = [];
 if (fs.existsSync(SWIGGY_DIR)) {
   for (const f of fs.readdirSync(SWIGGY_DIR).filter(x => x.endsWith(".csv"))) {
     settlements.push(...parseSwiggyText(fs.readFileSync(`${SWIGGY_DIR}/${f}`, "utf-8"), f));
+  }
+}
+if (fs.existsSync(ZOMATO_DIR)) {
+  for (const f of fs.readdirSync(ZOMATO_DIR).filter(x => x.startsWith("utr_report_") && x.endsWith(".csv"))) {
+    settlements.push(...parseZomatoUtrText(fs.readFileSync(`${ZOMATO_DIR}/${f}`, "utf-8"), f));
   }
 }
 

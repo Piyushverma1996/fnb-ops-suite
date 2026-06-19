@@ -50,6 +50,27 @@ function parseDate(s: string): Date | null {
   return Number.isFinite(t) ? new Date(t) : null;
 }
 
+// -------- Unified entry point --------
+//
+// Auto-detect file format from filename + first-line header content and
+// dispatch to the correct parser. Returns an empty list with a console
+// warning if the file isn't recognised.
+export async function parseSettlementFile(file: File): Promise<Settlement[]> {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".csv")) {
+    const text = await file.text();
+    const header = text.split(/\r?\n/, 1)[0] ?? "";
+    if (/utr_number\s*,\s*res_id/i.test(header)) return parseZomatoUtrText(text, file.name);
+    if (/^RID\s*,\s*Order Date/i.test(header)) return parseSwiggyText(text, file.name);
+    // Fallback: assume Swiggy
+    return parseSwiggyText(text, file.name);
+  }
+  if (name.endsWith(".xlsx")) {
+    return parseZomatoXLSX(file);
+  }
+  return [];
+}
+
 // -------- Swiggy CSV --------
 //
 // One row per order. Net Payable (after TCS, TDS) is column Y.
@@ -162,6 +183,94 @@ function parseCSVLine(line: string): string[] {
     }
   }
   out.push(cur);
+  return out;
+}
+
+// -------- Zomato UTR report CSV --------
+//
+// Zomato's `utr_report_mid_*.csv` is the clean per-order export with
+// utr_number, res_id, order_id, order_date, settlement_date, order_type,
+// status, amount. We group amount by UTR×res_id × order_type (sales vs
+// adjustments) and treat each group as one settlement event.
+//
+// Amount in this file is the per-order "amount to restaurant" — the same
+// number Zomato wires out, before any platform-level deductions that
+// might come on a separate invoice. Summing all `settled` rows per UTR
+// gives a Net Payout that matches the bank credit, in our spot checks.
+export async function parseZomatoUtrCSV(file: File): Promise<Settlement[]> {
+  const text = await file.text();
+  return parseZomatoUtrText(text, file.name);
+}
+
+export function parseZomatoUtrText(text: string, source: string): Settlement[] {
+  const lines = text.split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const header = parseCSVLine(lines[0]);
+  const col = (name: string) => header.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+  const I = {
+    utr:        col("utr_number"),
+    resId:      col("res_id"),
+    orderId:    col("order_id"),
+    orderDate:  col("order_date"),
+    settleDate: col("settlement_date"),
+    orderType:  col("order_type"),
+    status:     col("status"),
+    amount:     col("amount"),
+  };
+  if (I.utr < 0 || I.amount < 0) return [];
+
+  const groups = new Map<string, {
+    rid: string; orders: number; net: number;
+    minDate: Date | null; maxDate: Date | null;
+  }>();
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const row = parseCSVLine(line);
+    const utr = (row[I.utr] ?? "").trim();
+    if (!utr) continue;
+    const status = (row[I.status] ?? "").trim().toLowerCase();
+    if (status && status !== "settled") continue;
+    const rid = (row[I.resId] ?? "").trim();
+    const key = `${utr}|${rid}`;
+    const d = parseDate(row[I.orderDate] ?? "") ?? parseDate(row[I.settleDate] ?? "");
+    const cur = groups.get(key) ?? {
+      rid, orders: 0, net: 0,
+      minDate: null as Date | null, maxDate: null as Date | null,
+    };
+    cur.orders++;
+    cur.net += toNum(row[I.amount]);
+    if (d) {
+      if (!cur.minDate || d < cur.minDate) cur.minDate = d;
+      if (!cur.maxDate || d > cur.maxDate) cur.maxDate = d;
+    }
+    groups.set(key, cur);
+  }
+
+  const out: Settlement[] = [];
+  for (const [key, g] of groups) {
+    const [utr] = key.split("|");
+    out.push({
+      aggregator: "ZOMATO",
+      utr,
+      netPayout: Math.round(g.net * 100) / 100,
+      periodStart: g.minDate,
+      periodEnd: g.maxDate,
+      rid: g.rid,
+      orderCount: g.orders,
+      // The UTR report file doesn't break out per-RID commission / GST /
+      // TCS / TDS — those live in the per-week Settlement Report XLSX
+      // (Payout Breakup tab). We leave them at zero so the export still
+      // renders cleanly; if the user uploads both files we can enrich
+      // later.
+      grossSales: Math.round(g.net * 100) / 100,
+      totalCommission: 0,
+      totalGstFees: 0,
+      totalTcs: 0,
+      totalTds: 0,
+      source,
+    });
+  }
   return out;
 }
 

@@ -14,7 +14,7 @@ import {
   sniffBCLedger, sniffBankStatement, type BCMeta,
 } from "@/lib/parsers";
 import { runMatch, type MatchResult, type BankEntry, type SettlementInput } from "@/lib/matcher";
-import { parseSwiggyCSV, parseZomatoXLSX } from "@/lib/settlement";
+import { parseSettlementFile } from "@/lib/settlement";
 import { downloadReport } from "@/lib/export";
 
 export default function Home() {
@@ -65,12 +65,10 @@ export default function Home() {
     let cancelled = false;
     (async () => {
       let count = 0, totalNet = 0;
-      let aggregators = new Set<string>();
+      const aggregators = new Set<string>();
       for (const f of settlementFiles) {
         try {
-          const list = f.name.toLowerCase().endsWith(".csv")
-            ? await parseSwiggyCSV(f)
-            : await parseZomatoXLSX(f);
+          const list = await parseSettlementFile(f);
           for (const s of list) {
             count++; totalNet += s.netPayout; aggregators.add(s.aggregator);
           }
@@ -125,15 +123,11 @@ export default function Home() {
           `No BC entries for branch "${outlet}" between ${dateFrom} and ${dateTo}. Available branches in this file: ${available}.`,
         );
       }
-      // Parse any settlement files the user dropped in
-      let settlements: SettlementInput[] = [];
+      // Parse any settlement files the user dropped in (auto-detects format)
+      const settlements: SettlementInput[] = [];
       for (const f of settlementFiles) {
         try {
-          if (f.name.toLowerCase().endsWith(".csv")) {
-            settlements.push(...(await parseSwiggyCSV(f)));
-          } else if (f.name.toLowerCase().endsWith(".xlsx")) {
-            settlements.push(...(await parseZomatoXLSX(f)));
-          }
+          settlements.push(...(await parseSettlementFile(f)));
         } catch (e) {
           console.warn(`Failed to parse settlement ${f.name}`, e);
         }

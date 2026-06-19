@@ -5,7 +5,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as XLSX from "xlsx";
-import { runMatch, classifyBank, classifyBC, type BankEntry, type BCEntry } from "../src/lib/matcher.ts";
+import { runMatch, classifyBank, classifyBC, type BankEntry, type BCEntry, type SettlementInput } from "../src/lib/matcher.ts";
+import { parseSwiggyText } from "../src/lib/settlement.ts";
+
+const SWIGGY_DIR = "C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data/Aggregator settlement reports/Swiggy";
+const settlements: SettlementInput[] = [];
+if (fs.existsSync(SWIGGY_DIR)) {
+  for (const f of fs.readdirSync(SWIGGY_DIR).filter(x => x.endsWith(".csv"))) {
+    settlements.push(...parseSwiggyText(fs.readFileSync(`${SWIGGY_DIR}/${f}`, "utf-8"), f));
+  }
+}
 
 const SRC = "C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data";
 const BANK_DIR = path.join(SRC, "Bank Reco statements");
@@ -25,7 +34,7 @@ const cases = [
   { outlet: "SS",  bank: "SS_2321-imp.xls",    bc: "Bank Account Ledger Entries (8).xlsx" },
 ];
 
-const FROM = "2026-04-01", TO = "2026-04-05";
+const FROM = "2026-04-01", TO = "2026-06-15";
 
 function fixDate(v: unknown): Date | null {
   if (!v) return null;
@@ -112,7 +121,8 @@ const from = new Date(fy, fm - 1, fd);
 const to = new Date(ty, tm - 1, td, 23, 59, 59);
 
 console.log(`Sweep: ${cases.length} outlets · ${FROM} → ${TO}\n`);
-console.log("Outlet  Bank file               BC file                            Bank  BC    Match  Pct    T1/T2/T3/T4");
+console.log(`(loaded ${settlements.length} Swiggy settlements)\n`);
+console.log("Outlet  Bank file               BC file                            Bank  BC    Match  Pct    T1/T2/T3/T4/T5");
 console.log("-".repeat(120));
 
 const results: { outlet: string; bank: number; bc: number; matched: number; pct: number }[] = [];
@@ -126,10 +136,10 @@ for (const c of cases) {
     const bc0   = parseBC(fs.readFileSync(bcPath), c.outlet);
     const bank = bank0.filter(b => b.date >= from && b.date <= to).map((b, i) => ({ ...b, id: i }));
     const bc   = bc0.filter(x => x.postingDate >= from && x.postingDate <= to).map((x, i) => ({ ...x, id: i }));
-    const r = runMatch(bank, bc, { dateToleranceDays: 2, amountTolerance: 1.0, maxComponents: 15 });
-    const tiers = { T1: 0, T2: 0, T3: 0, T4: 0 };
+    const r = runMatch(bank, bc, { dateToleranceDays: 5, amountTolerance: 1.0, maxComponents: 100, settlements });
+    const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0 };
     for (const m of r.matches) tiers[m.tier]++;
-    const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}`;
+    const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}`;
     console.log(`${c.outlet.padEnd(7)} ${c.bank.padEnd(23)} ${c.bc.slice(0,34).padEnd(35)} ${String(bank.length).padStart(4)}  ${String(bc.length).padStart(4)}  ${String(r.stats.matchedBank).padStart(4)}   ${String(r.stats.matchPct).padStart(5)}%  ${tierStr}`);
     results.push({ outlet: c.outlet, bank: bank.length, bc: bc.length, matched: r.stats.matchedBank, pct: r.stats.matchPct });
   } catch (e: unknown) {

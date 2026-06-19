@@ -12,6 +12,7 @@
 import * as XLSX from "xlsx";
 import type { MatchResult, Match, BankEntry } from "./matcher";
 import { outletForSwiggy, outletForZomato } from "./rest-id-map";
+import { outletFromNarration } from "./bank-account-map";
 import { saveAs } from "file-saver";
 
 export function downloadReport(
@@ -109,18 +110,33 @@ export function downloadReport(
   const ubRows = result.unmatchedBank
     .slice()
     .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .map((b, i) => ({
-      "#": i + 1,
-      "Done": "",
-      "Date": fmtDate(b.date),
-      "Amount": b.absAmount,
-      "Dir": b.direction === "Credit" ? "CR" : "DR",
-      "Type": humanCategory(b.category),
-      "Narration": b.narration,
-      "Note": "",
-    }));
+    .map((b, i) => {
+      // For inter-outlet IB FUNDS TRANSFER lines, decode the account number
+      // in the narration and tell the accountant which outlet's BC ledger
+      // the counter-voucher will live in.
+      let suggestion = "";
+      if (b.category === "INTERNAL_CR" || b.category === "INTERNAL_DR") {
+        const other = outletFromNarration(b.narration);
+        if (other) {
+          suggestion = b.category === "INTERNAL_CR"
+            ? `Transfer from ${other} — check that outlet's BC ledger for the matching contra voucher`
+            : `Transfer to ${other} — check that outlet's BC ledger for the matching contra voucher`;
+        }
+      }
+      return {
+        "#": i + 1,
+        "Done": "",
+        "Date": fmtDate(b.date),
+        "Amount": b.absAmount,
+        "Dir": b.direction === "Credit" ? "CR" : "DR",
+        "Type": humanCategory(b.category),
+        "Suggested Action": suggestion,
+        "Narration": b.narration,
+        "Note": "",
+      };
+    });
   const sheet3 = XLSX.utils.json_to_sheet(ubRows);
-  applyColWidths(sheet3, [4, 7, 11, 14, 5, 16, 70, 30]);
+  applyColWidths(sheet3, [4, 7, 11, 14, 5, 16, 60, 70, 30]);
   XLSX.utils.book_append_sheet(wb, sheet3, "3 Unmatched Bank");
 
   // ───── Sheet 4: Unmatched BC ─────

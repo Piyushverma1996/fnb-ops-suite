@@ -21,6 +21,7 @@ export default function Home() {
   const [bankFile, setBankFile] = useState<File | null>(null);
   const [bcFile, setBcFile] = useState<File | null>(null);
   const [settlementFiles, setSettlementFiles] = useState<File[]>([]);
+  const [settlementSummary, setSettlementSummary] = useState<{ count: number; totalNet: number; aggregator: string } | null>(null);
 
   const [bcMeta, setBcMeta] = useState<BCMeta | null>(null);
   const [bankMeta, setBankMeta] = useState<{ minDate: Date | null; maxDate: Date | null; rows: number } | null>(null);
@@ -57,6 +58,28 @@ export default function Home() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bcFile]);
+
+  // Pre-parse settlement files to show a quick hint
+  useEffect(() => {
+    if (settlementFiles.length === 0) { setSettlementSummary(null); return; }
+    let cancelled = false;
+    (async () => {
+      let count = 0, totalNet = 0;
+      let aggregators = new Set<string>();
+      for (const f of settlementFiles) {
+        try {
+          const list = f.name.toLowerCase().endsWith(".csv")
+            ? await parseSwiggyCSV(f)
+            : await parseZomatoXLSX(f);
+          for (const s of list) {
+            count++; totalNet += s.netPayout; aggregators.add(s.aggregator);
+          }
+        } catch { /* surfaced at run time */ }
+      }
+      if (!cancelled) setSettlementSummary({ count, totalNet, aggregator: [...aggregators].join(" + ") || "-" });
+    })();
+    return () => { cancelled = true; };
+  }, [settlementFiles]);
 
   // Sniff bank file when uploaded
   useEffect(() => {
@@ -193,6 +216,13 @@ export default function Home() {
               files={settlementFiles}
               onChange={setSettlementFiles}
             />
+            {settlementSummary && settlementSummary.count > 0 && (
+              <p className="mt-2 text-xs text-violet-700 dark:text-violet-300">
+                Parsed <strong>{settlementSummary.count}</strong> {settlementSummary.aggregator} settlement{settlementSummary.count === 1 ? "" : "s"}
+                {" "}totaling <strong>₹{settlementSummary.totalNet.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong> net payout.
+                T5 matches will appear after you hit Match.
+              </p>
+            )}
           </div>
           {(bankMeta || bcMeta) && (
             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">

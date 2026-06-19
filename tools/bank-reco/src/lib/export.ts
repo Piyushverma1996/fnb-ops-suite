@@ -11,6 +11,7 @@
  */
 import * as XLSX from "xlsx";
 import type { MatchResult, Match, BankEntry } from "./matcher";
+import { outletForSwiggy, outletForZomato } from "./rest-id-map";
 import { saveAs } from "file-saver";
 
 export function downloadReport(
@@ -198,12 +199,17 @@ export function downloadReport(
       const gap = m.bankAmount - s.netPayout;
       const period = s.periodStart && s.periodEnd
         ? `${fmtDate(s.periodStart)} → ${fmtDate(s.periodEnd)}` : "";
+      const outletNames = s.rid.split(",").map(r => r.trim()).map(r => {
+        const o = s.aggregator === "SWIGGY" ? outletForSwiggy(r) : outletForZomato(r);
+        return o?.outletName ?? `RID ${r}`;
+      }).filter((v, idx, a) => a.indexOf(v) === idx).join("; ");
       return {
         "#": i + 1,
         "Done": "",
         "Bank Date": fmtDate(m.bankDate),
         "Bank Amount": m.bankAmount,
         "Aggregator": s.aggregator,
+        "Outlet (via RID)": outletNames,
         "Bank UTR": s.utr,
         "Settlement Period": period,
         "Orders": s.orderCount,
@@ -215,11 +221,10 @@ export function downloadReport(
         "Net Payout (per settlement file)": s.netPayout,
         "Δ vs Bank": round2(gap),
         "Notes": Math.abs(gap) > 100 ? "Verify deductions — significant gap" : "",
-        "Source file": s.aggregator + " settlement",
       };
     });
     const s7 = XLSX.utils.json_to_sheet(t5Rows);
-    applyColWidths(s7, [4, 7, 12, 13, 11, 22, 22, 7, 16, 16, 16, 14, 14, 16, 11, 32, 18]);
+    applyColWidths(s7, [4, 7, 12, 13, 11, 28, 22, 22, 7, 16, 16, 16, 14, 14, 16, 11, 32]);
     XLSX.utils.book_append_sheet(wb, s7, "7 Aggregator Settlements");
   }
 

@@ -75,6 +75,33 @@ export function downloadReport(
   applyColWidths(sheet0, [6, 70, 12, 12]);
   XLSX.utils.book_append_sheet(wb, sheet0, "0 How to Use");
 
+  // ───── Sheet 0a: What's Missing & How to Close It ─────
+  const missingRows = buildMissingReport(result);
+  const totalBank = result.stats.totalBank || 1;
+  const matched = result.stats.matchedBank;
+  const matchPct = result.stats.matchPct;
+  const missingHeader: (string | number)[][] = [
+    ["WHAT'S MISSING & HOW TO CLOSE IT"],
+    [`Outlet: ${outletCode}    Period: ${dateFrom} → ${dateTo}    Match: ${matched} / ${totalBank} (${matchPct}%)`],
+    [],
+    ["Every unmatched bank line is grouped by category below. Each row tells you exactly",
+     "what file or action would clear those lines. ACTION = upload a file. WORKFLOW =",
+     "depends on accountant timing. MANUAL = no auto-match possible, handle row-by-row."],
+    [],
+    ["Tier", "Category", "# Lines", "Total ₹", "% of bank", "What to do"],
+    ...missingRows.map(r => [
+      r.tier.toUpperCase(),
+      r.title,
+      r.count,
+      r.amount,
+      `${r.pct}%`,
+      r.action,
+    ]),
+  ];
+  const sheet0a = XLSX.utils.aoa_to_sheet(missingHeader);
+  applyColWidths(sheet0a, [10, 36, 9, 14, 10, 80]);
+  XLSX.utils.book_append_sheet(wb, sheet0a, "0a What's Missing");
+
   // ───── Sheet 1: Action Plan ─────
   const actionPlanRows = ordered.map((m, i) => ({
     "#": i + 1,
@@ -339,6 +366,109 @@ export function downloadReport(
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Build a structured "what's missing" report from a MatchResult. Used to
+ * render Sheet 0a in the Excel export; mirrors the logic of the in-app
+ * post-match diagnostic panel.
+ */
+type MissingTier = "action" | "workflow" | "manual";
+type MissingItem = { tier: MissingTier; title: string; count: number; pct: number; amount: number; action: string };
+
+function buildMissingReport(result: MatchResult): MissingItem[] {
+  const byCat = new Map<string, { count: number; amount: number }>();
+  for (const b of result.unmatchedBank) {
+    const cur = byCat.get(b.category) ?? { count: 0, amount: 0 };
+    cur.count++; cur.amount += b.absAmount;
+    byCat.set(b.category, cur);
+  }
+  const total = result.stats.totalBank || 1;
+  const pctOf = (n: number) => Math.round((n / total) * 1000) / 10;
+  const items: MissingItem[] = [];
+
+  const aggregator = (cat: string, brand: string, fileHint: string) => {
+    const d = byCat.get(cat);
+    if (!d || d.count === 0) return;
+    items.push({
+      tier: "action", title: `${brand} settlements (${cat})`,
+      count: d.count, pct: pctOf(d.count), amount: round2(d.amount),
+      action: `Upload the ${fileHint} covering the dates of these ${d.count} lines. The file likely doesn't span this window yet.`,
+    });
+  };
+  aggregator("SWIGGY", "Swiggy", "Swiggy `consolidate-annexure-orders*.csv`");
+  aggregator("ZOMATO", "Zomato", "Zomato `utr_report_mid*.csv`");
+  aggregator("NEFT_OTHER", "Zomato/Swiggy under legal name (NEFT_OTHER)", "Zomato `utr_report_mid*.csv` or Swiggy CSV");
+  aggregator("AMEX", "AmEx", "AmEx `Settlements*.csv` from the AmEx Merchant Statement export");
+  aggregator("PHONEPE", "PhonePe", "PhonePe `*_FORWARD_TRANSACTION_*.csv`");
+
+  const ic = byCat.get("INTERNAL_CR")?.count ?? 0;
+  const id = byCat.get("INTERNAL_DR")?.count ?? 0;
+  if (ic + id > 0) {
+    const amt = (byCat.get("INTERNAL_CR")?.amount ?? 0) + (byCat.get("INTERNAL_DR")?.amount ?? 0);
+    items.push({
+      tier: "action", title: "Inter-outlet IB FUNDS TRANSFER / FT-CR/DR",
+      count: ic + id, pct: pctOf(ic + id), amount: round2(amt),
+      action: `Upload the BC bank ledger exports for the counterparty outlets into the "Other outlets' BC bank ledgers" dropzone. Sheet 3 column "Suggested Action" tells you which outlet each line points to.`,
+    });
+  }
+
+  const cd = byCat.get("CASH_DEPOSIT");
+  if (cd && cd.count > 0) {
+    items.push({
+      tier: "action", title: "Cash deposits",
+      count: cd.count, pct: pctOf(cd.count), amount: round2(cd.amount),
+      action: `Upload the BC Sales Invoices export with Payment Type column covering the date range of these deposits. If already uploaded, re-export with a wider date range.`,
+    });
+  }
+
+  const vendor = byCat.get("VENDOR");
+  if (vendor && vendor.count > 0) {
+    items.push({
+      tier: "action", title: "Vendor / Vendor Control TPT",
+      count: vendor.count, pct: pctOf(vendor.count), amount: round2(vendor.amount),
+      action: `Upload the BC Bank Account Ledger export for the BK Vendor Control account (HDFC412 in BC's bank account master).`,
+    });
+  }
+
+  const cheque = byCat.get("CHEQUE");
+  if (cheque && cheque.count > 0) {
+    items.push({
+      tier: "manual", title: "Cheques (CHQ PAID-CTS)",
+      count: cheque.count, pct: pctOf(cheque.count), amount: round2(cheque.amount),
+      action: `Cheques don't have a settlement file. Match manually against the corresponding vendor / staff payment voucher in BC.`,
+    });
+  }
+
+  const other = byCat.get("OTHER");
+  if (other && other.count > 0) {
+    items.push({
+      tier: "manual", title: "Other (RTGS, ACH, non-categorised)",
+      count: other.count, pct: pctOf(other.count), amount: round2(other.amount),
+      action: `Mixed bag — RTGS/NEFT vendor payments, ACH credits, non-HDFC originated transfers. Spot-check Sheet 3 for the dominant pattern; usually handled row-by-row.`,
+    });
+  }
+
+  const neft = byCat.get("NEFT_OTHER");
+  if (neft && neft.count > 0 && !items.some(i => i.title.includes("NEFT_OTHER"))) {
+    items.push({
+      tier: "manual", title: "NEFT/RTGS (generic)",
+      count: neft.count, pct: pctOf(neft.count), amount: round2(neft.amount),
+      action: `Mostly outgoing vendor RTGS or incoming non-aggregator NEFTs. Match manually against vendor / customer payment vouchers.`,
+    });
+  }
+
+  const sal = byCat.get("SALARY");
+  if (sal && sal.count > 0) {
+    items.push({
+      tier: "manual", title: "Salary",
+      count: sal.count, pct: pctOf(sal.count), amount: round2(sal.amount),
+      action: `Match manually against the salary disbursement voucher in BC.`,
+    });
+  }
+
+  items.sort((a, b) => b.count - a.count);
+  return items;
 }
 
 function fmtDate(d: Date): string {

@@ -156,13 +156,13 @@ function parseDate(v: unknown): Date | null {
     const ms = v.getTime();
     const rounded = Math.round(ms / 86400000) * 86400000;
     const u = new Date(rounded);
-    return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+    return saneOrNull(new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate()));
   }
   // Excel serial number (when cellDates is off or library returns raw)
   if (typeof v === "number" && Number.isFinite(v)) {
     const ms = (v - 25569) * 86400000;
     const u = new Date(ms);
-    return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+    return saneOrNull(new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate()));
   }
   const s = String(v).trim();
   // DD/MM/YY or DD/MM/YYYY
@@ -171,12 +171,30 @@ function parseDate(v: unknown): Date | null {
     const d = +m[1], mo = +m[2] - 1;
     let y = +m[3];
     if (y < 100) y += 2000;
-    return new Date(y, mo, d);
+    return saneOrNull(new Date(y, mo, d));
   }
   // YYYY-MM-DD
   m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
-  // fallback
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? new Date(t) : null;
+  if (m) return saneOrNull(new Date(+m[1], +m[2] - 1, +m[3]));
+  // DD-MMM-YYYY  (e.g. "31-Mar-2026")
+  m = s.match(/^(\d{1,2})[\-\s]+([A-Za-z]{3,})[\-\s]+(\d{4})$/);
+  if (m) {
+    const months = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    const mi = months.indexOf(m[2].slice(0, 3).toUpperCase());
+    if (mi >= 0) return saneOrNull(new Date(+m[3], mi, +m[1]));
+  }
+  // No Date.parse fallback — it's too permissive and treats junk like
+  // "2225.06" (an HDFC statement footer) as June year 2225. If we don't
+  // recognise the format explicitly, fail.
+  return null;
+}
+
+// Reject dates outside a plausible window for current operations. Anything
+// outside [2020, 2030] is almost certainly a parser misread (HDFC statement
+// summary row, page footer, malformed cell, etc.).
+function saneOrNull(d: Date | null): Date | null {
+  if (!d) return null;
+  const y = d.getFullYear();
+  if (!Number.isFinite(y) || y < 2020 || y > 2030) return null;
+  return d;
 }

@@ -190,6 +190,43 @@ export default function Home() {
     return "Low — check that the branch code is correct.";
   }, [matchPct, result]);
 
+  // "What to upload to get closer to 100%" — scans unmatched bank lines and
+  // suggests the right input file based on category fingerprints.
+  const upgradeSuggestions = useMemo(() => {
+    if (!result) return [] as { label: string; missing: string; count: number; estPct: number }[];
+    const totalBank = result.stats.totalBank || 1;
+    const suggestions: { label: string; missing: string; count: number; estPct: number }[] = [];
+
+    const aggregatorCount = result.unmatchedBank.filter(b => {
+      const n = b.narration.toUpperCase();
+      return (
+        b.category === "SWIGGY" || b.category === "ZOMATO" ||
+        n.includes("BUNDL TECHNOLOGIES") || n.includes("ETERNAL LIMITED") ||
+        n.includes("SWIGGY") || n.includes("ZOMATO")
+      );
+    }).length;
+    if (aggregatorCount > 0 && settlementFiles.length === 0) {
+      suggestions.push({
+        label: "Aggregator settlement files (Swiggy + Zomato)",
+        missing: "Upload all Swiggy `consolidate-annexure*.csv` and Zomato `utr_report_*.csv` files",
+        count: aggregatorCount,
+        estPct: Math.round((aggregatorCount / totalBank) * 1000) / 10,
+      });
+    }
+
+    const cashDepositCount = result.unmatchedBank.filter(b => b.category === "CASH_DEPOSIT").length;
+    if (cashDepositCount > 0 && !salesInvoiceFile) {
+      suggestions.push({
+        label: "Sales Invoices file (cash deposits)",
+        missing: "Upload the BC `Sales Invoices` export with Payment Type column",
+        count: cashDepositCount,
+        estPct: Math.round((cashDepositCount / totalBank) * 1000) / 10,
+      });
+    }
+
+    return suggestions;
+  }, [result, settlementFiles, salesInvoiceFile]);
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
       <header className="border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 sticky top-0 z-10">
@@ -381,6 +418,24 @@ export default function Home() {
               <StatCard label="Unmatched Bank" value={result.stats.unmatchedBank} variant="warning" icon={AlertTriangle} />
               <StatCard label="Unmatched BC" value={result.stats.unmatchedBC} variant="error" icon={XCircle} />
             </div>
+
+            {upgradeSuggestions.length > 0 && (
+              <div className="mb-5 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4">
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100 mb-2">
+                  Push match % higher — add these files and rerun:
+                </p>
+                <ul className="space-y-1.5">
+                  {upgradeSuggestions.map((s, i) => (
+                    <li key={i} className="text-sm text-amber-900 dark:text-amber-100 flex items-start gap-2">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-300 mt-2 flex-shrink-0" />
+                      <div>
+                        <strong>{s.label}</strong> — could clear up to {s.count} unmatched bank lines (~{s.estPct}% lift). {s.missing}.
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-5">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3">

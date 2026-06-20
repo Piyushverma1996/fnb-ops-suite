@@ -142,7 +142,7 @@ for (const c of cases) {
     const bc0   = parseBC(fs.readFileSync(bcPath), c.outlet);
     const bank = bank0.filter(b => b.date >= from && b.date <= to).map((b, i) => ({ ...b, id: i }));
     const bc   = bc0.filter(x => x.postingDate >= from && x.postingDate <= to).map((x, i) => ({ ...x, id: i }));
-    const r = runMatch(bank, bc, { dateToleranceDays: 5, amountTolerance: 1.0, maxComponents: 100, settlements });
+    const r = runMatch(bank, bc, { dateToleranceDays: 2, amountTolerance: 1.0, maxComponents: 100, settlements });
     const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0 };
     for (const m of r.matches) tiers[m.tier]++;
     const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}`;

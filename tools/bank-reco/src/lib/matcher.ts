@@ -37,7 +37,8 @@ export type BCEntry = {
 export type BankCategory =
   | "CARD_SETTLEMENT" | "SWIGGY" | "ZOMATO" | "AMEX" | "DINEOUT"
   | "INTERNAL_CR" | "INTERNAL_DR" | "PHONEPE" | "PAYTM" | "GPAY"
-  | "BHARATPE" | "UPI" | "SALARY" | "VENDOR" | "NEFT_OTHER" | "CHEQUE" | "OTHER";
+  | "BHARATPE" | "UPI" | "SALARY" | "VENDOR" | "NEFT_OTHER" | "CHEQUE"
+  | "CASH_DEPOSIT" | "OTHER";
 
 export type BCCategory =
   | "CARD_SETTLEMENT" | "AMEX" | "SWIGGY" | "ZOMATO" | "DINEOUT"
@@ -47,7 +48,7 @@ export type BCCategory =
 export type Match = {
   bankId: number;
   bcIds: number[];
-  tier: "T1" | "T2" | "T3" | "T4" | "T5";
+  tier: "T1" | "T2" | "T3" | "T4" | "T5" | "T6";
   tierLabel: string;
   confidence: number;
   bankDate: Date;
@@ -60,6 +61,15 @@ export type Match = {
   category: BankCategory;
   direction: "Credit" | "Debit";
   settlement?: SettlementHit;
+  cashBucket?: CashBucketHit;
+};
+
+export type CashBucketHit = {
+  invoiceCount: number;
+  invoiceDocs: string[];
+  invoiceDate: string;          // YYYY-MM-DD of the bucket
+  outletCode: string;
+  bucketTotal: number;
 };
 
 export type SettlementHit = {
@@ -107,6 +117,8 @@ export type DailySummary = {
 export function classifyBank(narr: string): BankCategory {
   const n = (narr || "").toUpperCase();
   if (n.includes("TERMINAL") && n.includes("CARDS SETTL")) return "CARD_SETTLEMENT";
+  // Physical cash deposited at HDFC — matches T-1 sum of BC cash SI entries.
+  if (n.includes("CASH DEPOSIT") || n.includes("CASH DEP")) return "CASH_DEPOSIT";
   if (n.includes("NEFT") && n.includes("SWIGGY")) return "SWIGGY";
   if (n.includes("NEFT") && n.includes("ZOMATO")) return "ZOMATO";
   if (n.includes("NEFT") && (n.includes("AMERICAN EXPRESS") || n.includes("AMEX"))) return "AMEX";
@@ -166,6 +178,11 @@ const CATEGORY_MAP: Record<BankCategory, Set<BCCategory>> = {
   VENDOR:          new Set(["VENDOR"]),
   NEFT_OTHER:      new Set(["INVOICE_PAYMENT", "VENDOR", "INTERNAL_TRANSFER", "OTHER"]),
   CHEQUE:          new Set(["INVOICE_PAYMENT", "VENDOR", "OTHER"]),
+  // Physical cash deposits reconcile to the sum of cash-payment Sales Invoices
+  // (BC posts each cash SI as one bank-ledger entry with description starting
+  // "Invoice PP/..." — classified as INVOICE_PAYMENT). Allow OTHER as a
+  // looser fallback for descriptions like "Cash Sale (HDFC)".
+  CASH_DEPOSIT:    new Set(["INVOICE_PAYMENT", "OTHER"]),
   OTHER:           new Set(["OTHER"]),
 };
 
@@ -364,6 +381,16 @@ export type MatchOptions = {
   amountTolerance: number;
   maxComponents: number;
   settlements?: SettlementInput[];
+  cashInvoices?: CashInvoiceInput[];
+  outletCode?: string;
+};
+
+/** A single cash-payment Sales Invoice, used for T6 deposit matching. */
+export type CashInvoiceInput = {
+  docNo: string;
+  postingDate: Date;
+  locationCode: string;
+  grossTotal: number;
 };
 
 /** Slim view of a parsed settlement — passed in from settlement.ts. */
@@ -515,6 +542,48 @@ export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOpti
     }
   }
 
+  // ---- Tier 6: Cash deposit T+1 bucket match ----
+  //
+  // For each still-unmatched CASH_DEPOSIT bank line, look at cash Sales
+  // Invoices for the outlet posted in the window [T-3, T+0] (Indian retail
+  // deposits typically settle T+1 but allow weekends). Try to find a date
+  // bucket whose Gross Total sum equals the bank credit within tolerance.
+  if (opts.cashInvoices && opts.cashInvoices.length > 0 && opts.outletCode) {
+    const outlet = opts.outletCode.toUpperCase();
+    const cashByDate = new Map<string, CashInvoiceInput[]>();
+    for (const ci of opts.cashInvoices) {
+      if (ci.locationCode.toUpperCase() !== outlet) continue;
+      const k = isoDate(ci.postingDate);
+      if (!cashByDate.has(k)) cashByDate.set(k, []);
+      cashByDate.get(k)!.push(ci);
+    }
+    for (const b of bankAll) {
+      if (bankUsed.has(b.id)) continue;
+      if (b.category !== "CASH_DEPOSIT") continue;
+      if (b.direction !== "Credit") continue;
+      const hit = findCashBucket(b, cashByDate, opts.amountTolerance);
+      if (!hit) continue;
+      matches.push({
+        bankId: b.id,
+        bcIds: [],
+        tier: "T6",
+        tierLabel: `T6: Cash deposit (${hit.invoiceCount} bills, ${hit.invoiceDate})`,
+        confidence: 88,
+        bankDate: b.date,
+        bcDate: b.date,
+        bankAmount: b.absAmount,
+        bcSumAmount: hit.bucketTotal,
+        bankNarration: b.narration,
+        bcDocs: `Cash SI bucket ${hit.invoiceDate} (${hit.invoiceCount} bills)`,
+        bcDescriptions: hit.invoiceDocs.slice(0, 3).join("; "),
+        category: b.category,
+        direction: b.direction,
+        cashBucket: hit,
+      });
+      bankUsed.add(b.id);
+    }
+  }
+
   const unmatchedBank = bankAll.filter(b => !bankUsed.has(b.id));
   const unmatchedBC = bcAll.filter(c => !bcUsed.has(c.id));
   const summary = buildSummary(bankAll, bcAll, unmatchedBank, unmatchedBC);
@@ -595,6 +664,40 @@ function findSettlementMatch(
     if (Math.abs(s.netPayout - b.absAmount) > brandTol) continue;
     if (isSwiggy && s.aggregator === "SWIGGY") return s;
     if (isZomato && s.aggregator === "ZOMATO") return s;
+  }
+  return null;
+}
+
+function isoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function findCashBucket(
+  b: BankEntry,
+  cashByDate: Map<string, CashInvoiceInput[]>,
+  tolerance: number,
+): CashBucketHit | null {
+  // Try in priority order: T-1 (typical T+1 deposit), T-0 (same-day deposit),
+  // T-2, T-3 (weekend catch-up).
+  const tryOrder = [-1, 0, -2, -3];
+  for (const delta of tryOrder) {
+    const date = new Date(b.date.getFullYear(), b.date.getMonth(), b.date.getDate() + delta);
+    const key = isoDate(date);
+    const bucket = cashByDate.get(key);
+    if (!bucket || bucket.length === 0) continue;
+    const total = Math.round(bucket.reduce((t, ci) => t + ci.grossTotal, 0) * 100) / 100;
+    if (Math.abs(total - b.absAmount) <= tolerance) {
+      return {
+        invoiceCount: bucket.length,
+        invoiceDocs: bucket.map(ci => ci.docNo),
+        invoiceDate: key,
+        outletCode: bucket[0].locationCode,
+        bucketTotal: total,
+      };
+    }
   }
   return null;
 }

@@ -13,8 +13,9 @@ import {
   parseBankStatement, parseBCLedger,
   sniffBCLedger, sniffBankStatement, type BCMeta,
 } from "@/lib/parsers";
-import { runMatch, type MatchResult, type BankEntry, type SettlementInput } from "@/lib/matcher";
+import { runMatch, type MatchResult, type BankEntry, type SettlementInput, type CashInvoiceInput } from "@/lib/matcher";
 import { parseSettlementFile } from "@/lib/settlement";
+import { parseSalesInvoices } from "@/lib/sales-invoices";
 import { downloadReport } from "@/lib/export";
 
 export default function Home() {
@@ -22,6 +23,8 @@ export default function Home() {
   const [bcFile, setBcFile] = useState<File | null>(null);
   const [settlementFiles, setSettlementFiles] = useState<File[]>([]);
   const [settlementSummary, setSettlementSummary] = useState<{ count: number; totalNet: number; aggregator: string } | null>(null);
+  const [salesInvoiceFile, setSalesInvoiceFile] = useState<File | null>(null);
+  const [siSummary, setSiSummary] = useState<{ totalCash: number; cashBills: number } | null>(null);
 
   const [bcMeta, setBcMeta] = useState<BCMeta | null>(null);
   const [bankMeta, setBankMeta] = useState<{ minDate: Date | null; maxDate: Date | null; rows: number } | null>(null);
@@ -33,7 +36,7 @@ export default function Home() {
 
   const [dateTol, setDateTol] = useState(2);
   const [amountTol, setAmountTol] = useState(1);
-  const [maxComp, setMaxComp] = useState(15);
+  const [maxComp, setMaxComp] = useState(100);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [running, setRunning] = useState(false);
@@ -78,6 +81,21 @@ export default function Home() {
     })();
     return () => { cancelled = true; };
   }, [settlementFiles]);
+
+  // Pre-parse Sales Invoice file when uploaded
+  useEffect(() => {
+    if (!salesInvoiceFile) { setSiSummary(null); return; }
+    let cancelled = false;
+    parseSalesInvoices(salesInvoiceFile)
+      .then(rows => {
+        if (cancelled) return;
+        const cash = rows.filter(r => r.paymentType.toUpperCase() === "CASH");
+        const total = cash.reduce((t, r) => t + r.grossTotal, 0);
+        setSiSummary({ totalCash: total, cashBills: cash.length });
+      })
+      .catch(() => { /* surfaced at run time */ });
+    return () => { cancelled = true; };
+  }, [salesInvoiceFile]);
 
   // Sniff bank file when uploaded
   useEffect(() => {
@@ -132,11 +150,25 @@ export default function Home() {
           console.warn(`Failed to parse settlement ${f.name}`, e);
         }
       }
+      // Parse Sales Invoices (cash deposit T+1 matching) if provided.
+      let cashInvoices: CashInvoiceInput[] = [];
+      if (salesInvoiceFile) {
+        try {
+          const si = await parseSalesInvoices(salesInvoiceFile);
+          cashInvoices = si
+            .filter(x => x.paymentType.toUpperCase() === "CASH")
+            .map(x => ({ docNo: x.docNo, postingDate: x.postingDate, locationCode: x.locationCode, grossTotal: x.grossTotal }));
+        } catch (e) {
+          console.warn("Failed to parse Sales Invoices", e);
+        }
+      }
       const res = runMatch(bankF, bcF, {
         dateToleranceDays: dateTol,
         amountTolerance: amountTol,
         maxComponents: maxComp,
         settlements: settlements.length > 0 ? settlements : undefined,
+        cashInvoices: cashInvoices.length > 0 ? cashInvoices : undefined,
+        outletCode: outlet,
       });
       setResult(res);
       setFilteredBank(bankF);
@@ -147,7 +179,7 @@ export default function Home() {
     } finally {
       setRunning(false);
     }
-  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta, settlementFiles]);
+  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta, settlementFiles, salesInvoiceFile]);
 
   const matchPct = result?.stats.matchPct ?? 0;
   const matchHealthText = useMemo(() => {
@@ -215,6 +247,21 @@ export default function Home() {
                 Parsed <strong>{settlementSummary.count}</strong> {settlementSummary.aggregator} settlement{settlementSummary.count === 1 ? "" : "s"}
                 {" "}totaling <strong>₹{settlementSummary.totalNet.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong> net payout.
                 T5 matches will appear after you hit Match.
+              </p>
+            )}
+          </div>
+          <div className="mt-3">
+            <FileDropzone
+              label="Sales Invoices (optional)"
+              subtitle="BC Sales Invoice export with Payment Type column — unlocks T6 cash deposit matching"
+              file={salesInvoiceFile}
+              onChange={setSalesInvoiceFile}
+            />
+            {siSummary && siSummary.cashBills > 0 && (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                Parsed <strong>{siSummary.cashBills}</strong> cash-payment bills across all outlets
+                {" "}totaling <strong>₹{siSummary.totalCash.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong>.
+                T6 matches the daily totals for branch <code className="font-mono">{outlet || "-"}</code> to bank cash deposit lines (T-1 to T+0).
               </p>
             )}
           </div>

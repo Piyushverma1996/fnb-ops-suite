@@ -83,9 +83,12 @@ export function downloadReport(
     "Bank Amount": m.bankAmount,
     "Dir": m.direction === "Credit" ? "CR" : "DR",
     "Tier": m.tier,
-    "BC Doc(s) to Apply": m.tier === "T5" && m.settlement
-      ? `Create BR voucher: Net ₹${m.settlement.netPayout.toFixed(2)} (${m.settlement.aggregator} UTR ${m.settlement.utr})`
-      : m.bcDocs,
+    "BC Doc(s) to Apply":
+      m.tier === "T5" && m.settlement
+        ? `Create BR voucher: Net ₹${m.settlement.netPayout.toFixed(2)} (${m.settlement.aggregator} UTR ${m.settlement.utr})`
+        : m.tier === "T6" && m.cashBucket
+        ? `Create cash deposit voucher: ${m.cashBucket.invoiceCount} cash bills from ${m.cashBucket.invoiceDate} totaling ₹${m.cashBucket.bucketTotal.toFixed(2)}`
+        : m.bcDocs,
     "Type": humanCategory(m.category),
     "Bank line (for reference)": shortenNarration(m.bankNarration),
   }));
@@ -244,6 +247,30 @@ export function downloadReport(
     XLSX.utils.book_append_sheet(wb, s7, "7 Aggregator Settlements");
   }
 
+  // ───── Cash Deposits (T6) — extra sheet if any ─────
+  const t6 = ordered.filter(m => m.tier === "T6" && m.cashBucket);
+  if (t6.length > 0) {
+    const t6Rows = t6.map((m, i) => {
+      const c = m.cashBucket!;
+      return {
+        "#": i + 1,
+        "Done": "",
+        "Bank Date": fmtDate(m.bankDate),
+        "Bank Amount": m.bankAmount,
+        "Cash Bills From": c.invoiceDate,
+        "# Bills": c.invoiceCount,
+        "Bucket Total": c.bucketTotal,
+        "Δ vs Bank": round2(m.bankAmount - c.bucketTotal),
+        "Outlet": c.outletCode,
+        "Sample Doc Nos (first 5)": c.invoiceDocs.slice(0, 5).join("; "),
+        "Bank Narration": shortenNarration(m.bankNarration),
+      };
+    });
+    const s8 = XLSX.utils.json_to_sheet(t6Rows);
+    applyColWidths(s8, [4, 7, 12, 13, 14, 8, 13, 11, 8, 60, 60]);
+    XLSX.utils.book_append_sheet(wb, s8, "8 Cash Deposits");
+  }
+
   // ───── Sheet 6: All Matches (raw detail) ─────
   const allMatchedRows = ordered.map(m => ({
     "Bank Date": fmtDate(m.bankDate),
@@ -306,6 +333,7 @@ function humanCategory(c: string): string {
     VENDOR: "Vendor",
     NEFT_OTHER: "NEFT/RTGS",
     CHEQUE: "Cheque",
+    CASH_DEPOSIT: "Cash deposit",
     INVOICE_PAYMENT: "Invoice",
     INTERNAL_TRANSFER: "Inter-acct",
     OTHER: "Other",

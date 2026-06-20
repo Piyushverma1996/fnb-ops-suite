@@ -17,8 +17,10 @@ import { runMatch, type MatchResult, type BankEntry, type SettlementInput, type 
 import { parseSettlementFile } from "@/lib/settlement";
 import { parseSalesInvoices } from "@/lib/sales-invoices";
 import { downloadReport } from "@/lib/export";
+import { BatchMode } from "@/components/batch-mode";
 
 export default function Home() {
+  const [mode, setMode] = useState<"single" | "batch">("single");
   const [bankFile, setBankFile] = useState<File | null>(null);
   const [bcFile, setBcFile] = useState<File | null>(null);
   const [extraBcFiles, setExtraBcFiles] = useState<File[]>([]);
@@ -338,6 +340,26 @@ export default function Home() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
+        {/* Mode toggle */}
+        <div className="mb-6 inline-flex rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-1">
+          <button
+            onClick={() => setMode("single")}
+            className={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${mode === "single" ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"}`}
+          >
+            Single outlet
+          </button>
+          <button
+            onClick={() => setMode("batch")}
+            className={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${mode === "batch" ? "bg-blue-600 text-white" : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"}`}
+          >
+            Batch (all outlets)
+          </button>
+        </div>
+
+        {mode === "batch" && <BatchMode />}
+        {mode === "single" && (
+        <>
+
         {/* Step 1 */}
         <Step n={1} title="Upload your files" subtitle="One HDFC bank statement, one BC bank ledger export.">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -575,6 +597,9 @@ export default function Home() {
               <ResultsTabs result={result} />
             </div>
           </div>
+        )}
+
+        </>
         )}
 
         <footer className="mt-12 pb-6 text-xs text-slate-400 text-center space-y-1">

@@ -22,6 +22,29 @@ export function downloadReport(
   dateTo: string,
   bank: BankEntry[] = [],
 ) {
+  const buf = buildReportBuffer(result, outletCode, dateFrom, dateTo, bank);
+  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  saveAs(blob, `BankReco_${outletCode}_${dateFrom}_${dateTo}.xlsx`);
+}
+
+/** Same as downloadReport but returns the raw .xlsx ArrayBuffer for ZIP packaging. */
+export function downloadReportToBlob(
+  result: MatchResult,
+  outletCode: string,
+  dateFrom: string,
+  dateTo: string,
+  bank: BankEntry[] = [],
+): ArrayBuffer {
+  return buildReportBuffer(result, outletCode, dateFrom, dateTo, bank);
+}
+
+function buildReportBuffer(
+  result: MatchResult,
+  outletCode: string,
+  dateFrom: string,
+  dateTo: string,
+  bank: BankEntry[] = [],
+): ArrayBuffer {
   const wb = XLSX.utils.book_new();
 
   // Statement balances (for the BC reconciliation header fields)
@@ -359,9 +382,7 @@ export function downloadReport(
   }));
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allMatchedRows), "6 All Matches");
 
-  const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-  const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  saveAs(blob, `BankReco_${outletCode}_${dateFrom}_${dateTo}.xlsx`);
+  return XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
 }
 
 function round2(n: number): number {

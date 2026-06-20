@@ -171,7 +171,7 @@ for (const c of cases) {
     settlements, cashInvoices, outletCode: c.outlet,
     crossOutletBC: crossBCF.length > 0 ? crossBCF : undefined,
   });
-  const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, T7: 0 };
+  const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, T7: 0, T8: 0 };
   for (const m of r.matches) tiers[m.tier]++;
 
   // Invariant checks
@@ -196,7 +196,7 @@ for (const c of cases) {
   // (d) matched count consistency
   if (r.stats.matchedBank !== bankIdsSeen.size) issues.push(`matchedBank count mismatch`);
 
-  const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}/${tiers.T6}/${tiers.T7}`;
+  const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}/${tiers.T6}/${tiers.T7}/${tiers.T8}`;
   const invariantTag = issues.length === 0 ? "OK" : `FAIL: ${issues.join(", ")}`;
   console.log(`${c.outlet.padEnd(7)} ${String(bank.length).padStart(4)} ${String(bc.length).padStart(4)} ${String(r.stats.matchedBank).padStart(4)}   ${String(r.stats.matchPct).padStart(5)}%  ${tierStr.padEnd(19)} ${invariantTag}`);
   results.push({ outlet: c.outlet, matchPct: r.stats.matchPct, matches: r.matches.length, t5: tiers.T5, t6: tiers.T6, t7: tiers.T7, issues });

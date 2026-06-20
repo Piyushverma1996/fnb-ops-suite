@@ -14,7 +14,7 @@ const TABS = [
 ] as const;
 
 type TabId = typeof TABS[number]["id"];
-type TierFilter = "ALL" | "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7";
+type TierFilter = "ALL" | "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "T8";
 
 export function ResultsTabs({ result }: { result: MatchResult }) {
   const [tab, setTab] = useState<TabId>("matched");
@@ -61,6 +61,7 @@ function tierColor(tier: string): string {
   if (tier.startsWith("T5")) return "bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-300";
   if (tier.startsWith("T6")) return "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300";
   if (tier.startsWith("T7")) return "bg-pink-100 text-pink-800 dark:bg-pink-900/40 dark:text-pink-300";
+  if (tier.startsWith("T8")) return "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300";
   return "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300";
 }
 
@@ -91,7 +92,7 @@ function MatchedTable({ result }: { result: MatchResult }) {
   }, [q, tier, result.matches]);
 
   const tierCounts = useMemo(() => {
-    const c: Record<string, number> = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, T7: 0 };
+    const c: Record<string, number> = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, T7: 0, T8: 0 };
     for (const m of result.matches) c[m.tier] = (c[m.tier] ?? 0) + 1;
     return c;
   }, [result.matches]);
@@ -296,6 +297,7 @@ function TierChips({
     { id: "T5", label: `T5 (${counts.T5 ?? 0})` },
     { id: "T6", label: `T6 (${counts.T6 ?? 0})` },
     { id: "T7", label: `T7 (${counts.T7 ?? 0})` },
+    { id: "T8", label: `T8 (${counts.T8 ?? 0})` },
   ];
   return (
     <div className="flex flex-wrap gap-1">

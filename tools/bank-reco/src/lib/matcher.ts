@@ -48,7 +48,7 @@ export type BCCategory =
 export type Match = {
   bankId: number;
   bcIds: number[];
-  tier: "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7";
+  tier: "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "T8";
   tierLabel: string;
   confidence: number;
   bankDate: Date;
@@ -552,6 +552,44 @@ export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOpti
       };
       matches.push(m);
       bankUsed.add(b.id);
+    }
+  }
+
+  // ---- Tier 8: Narration brand match (additive, no classifier change) ----
+  //
+  // For each still-unmatched bank line that *mentions* a known aggregator
+  // brand (AmEx / Swiggy / Zomato / Bundl / Eternal) in its narration, find
+  // an unmatched BC entry whose description ALSO mentions the same brand,
+  // with same direction, same amount within tolerance, within ±N days.
+  //
+  // Why this exists: BC's PBR/BR voucher description copies the bank narration
+  // verbatim, so the brand keyword is present on both sides — but the BC
+  // classifier returns OTHER when the description lacks "CARD" or "CARD GROUP".
+  // Strict OTHER ↔ OTHER pairing was the historical match path; touching the
+  // classifier would reclassify those entries and break the historical matches.
+  // T8 layers brand-substring matching on top WITHOUT changing categorisation.
+  {
+    const brandFingerprints: Array<{ tag: string; tokens: string[] }> = [
+      { tag: "AMEX",   tokens: ["AMERICAN EXPRESS", "AMEX"] },
+      { tag: "SWIGGY", tokens: ["SWIGGY", "BUNDL TECHNOLOGIES"] },
+      { tag: "ZOMATO", tokens: ["ZOMATO", "ETERNAL LIMITED"] },
+      { tag: "PHONEPE",tokens: ["PHONEPE", "PHONE PE", "PHONEPELIMITED"] },
+    ];
+    for (const b of bankAll) {
+      if (bankUsed.has(b.id)) continue;
+      const bn = b.narration.toUpperCase();
+      const fp = brandFingerprints.find(f => f.tokens.some(t => bn.includes(t)));
+      if (!fp) continue;
+      const cand = bcAll.find(c =>
+        !bcUsed.has(c.id) &&
+        c.direction === b.direction &&
+        Math.abs(c.absAmount - b.absAmount) <= opts.amountTolerance &&
+        withinDays(c.postingDate, b.date, opts.dateToleranceDays) &&
+        fp.tokens.some(t => c.description.toUpperCase().includes(t)),
+      );
+      if (!cand) continue;
+      matches.push(mkMatch(b, [cand], "T8", `T8: Brand match (${fp.tag})`, 85));
+      bankUsed.add(b.id); bcUsed.add(cand.id);
     }
   }
 

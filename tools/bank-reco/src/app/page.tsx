@@ -211,41 +211,106 @@ export default function Home() {
     return "Low — check that the branch code is correct.";
   }, [matchPct, result]);
 
-  // "What to upload to get closer to 100%" — scans unmatched bank lines and
-  // suggests the right input file based on category fingerprints.
-  const upgradeSuggestions = useMemo(() => {
-    if (!result) return [] as { label: string; missing: string; count: number; estPct: number }[];
-    const totalBank = result.stats.totalBank || 1;
-    const suggestions: { label: string; missing: string; count: number; estPct: number }[] = [];
+  // Rich post-match diagnostic: for every category of unmatched bank lines,
+  // tell the user (a) how many lines + ₹, (b) what file or workflow action
+  // would close them, and (c) whether the data is auto-fixable today vs
+  // requires either more uploads or non-tool work.
+  const missingReport = useMemo(() => {
+    if (!result) return null;
+    const byCat = new Map<string, { count: number; amount: number; samples: string[] }>();
+    for (const b of result.unmatchedBank) {
+      const cur = byCat.get(b.category) ?? { count: 0, amount: 0, samples: [] };
+      cur.count++; cur.amount += b.absAmount;
+      if (cur.samples.length < 2) cur.samples.push(b.narration.slice(0, 70));
+      byCat.set(b.category, cur);
+    }
+    const total = result.stats.totalBank || 1;
+    const fmtPct = (n: number) => Math.round((n / total) * 1000) / 10;
+    const fmtAmt = (n: number) => "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 0 });
 
-    const aggregatorCount = result.unmatchedBank.filter(b => {
-      const n = b.narration.toUpperCase();
-      return (
-        b.category === "SWIGGY" || b.category === "ZOMATO" ||
-        n.includes("BUNDL TECHNOLOGIES") || n.includes("ETERNAL LIMITED") ||
-        n.includes("SWIGGY") || n.includes("ZOMATO")
-      );
-    }).length;
-    if (aggregatorCount > 0 && settlementFiles.length === 0) {
-      suggestions.push({
-        label: "Aggregator settlement files (Swiggy + Zomato)",
-        missing: "Upload all Swiggy `consolidate-annexure*.csv` and Zomato `utr_report_*.csv` files",
-        count: aggregatorCount,
-        estPct: Math.round((aggregatorCount / totalBank) * 1000) / 10,
+    // Helper for human action prompts
+    const items: { tier: "data" | "workflow" | "manual"; title: string; count: number; pct: number; amount: number; action: string }[] = [];
+
+    const aggregatorBrands = (cat: string, brand: string, fileHint: string) => {
+      const d = byCat.get(cat);
+      if (!d) return;
+      items.push({
+        tier: "data", title: `${brand} settlements (${cat})`,
+        count: d.count, pct: fmtPct(d.count), amount: d.amount,
+        action: settlementFiles.length === 0
+          ? `Upload ${fileHint} into the Aggregator settlement files dropzone.`
+          : `Already have settlements — upload the ${fileHint} for the dates of these ${d.count} lines (likely outside the date range of uploaded files).`,
+      });
+    };
+    aggregatorBrands("SWIGGY", "Swiggy", "Swiggy `consolidate-annexure-orders*.csv`");
+    aggregatorBrands("ZOMATO", "Zomato", "Zomato `utr_report_mid*.csv`");
+    aggregatorBrands("NEFT_OTHER", "Zomato/Swiggy under legal name", "the Zomato `utr_report_mid*.csv` or Swiggy CSV for these dates");
+    aggregatorBrands("AMEX", "AmEx", "AmEx `Settlements*.csv`");
+    aggregatorBrands("PHONEPE", "PhonePe", "PhonePe `*_FORWARD_TRANSACTION_*.csv`");
+
+    const internalCount = (byCat.get("INTERNAL_CR")?.count ?? 0) + (byCat.get("INTERNAL_DR")?.count ?? 0);
+    const internalAmt = (byCat.get("INTERNAL_CR")?.amount ?? 0) + (byCat.get("INTERNAL_DR")?.amount ?? 0);
+    if (internalCount > 0) {
+      items.push({
+        tier: "data", title: "Inter-outlet IB FUNDS TRANSFER / FT-CR/DR",
+        count: internalCount, pct: fmtPct(internalCount), amount: internalAmt,
+        action: `Upload the BC bank ledger exports for the counterparty outlets (see Sheet 3 "Suggested Action" column for which outlet each one points to).`,
       });
     }
 
-    const cashDepositCount = result.unmatchedBank.filter(b => b.category === "CASH_DEPOSIT").length;
-    if (cashDepositCount > 0 && !salesInvoiceFile) {
-      suggestions.push({
-        label: "Sales Invoices file (cash deposits)",
-        missing: "Upload the BC `Sales Invoices` export with Payment Type column",
-        count: cashDepositCount,
-        estPct: Math.round((cashDepositCount / totalBank) * 1000) / 10,
+    const cashCount = byCat.get("CASH_DEPOSIT")?.count ?? 0;
+    if (cashCount > 0) {
+      items.push({
+        tier: !salesInvoiceFile ? "data" : "workflow",
+        title: "Cash deposits",
+        count: cashCount, pct: fmtPct(cashCount), amount: byCat.get("CASH_DEPOSIT")!.amount,
+        action: !salesInvoiceFile
+          ? "Upload the BC Sales Invoices export with Payment Type column."
+          : "Sales Invoices file is uploaded but its cash bills don't span these deposit dates. Re-export Sales Invoices for the wider date range.",
       });
     }
 
-    return suggestions;
+    const vendorCount = byCat.get("VENDOR")?.count ?? 0;
+    if (vendorCount > 0) {
+      items.push({
+        tier: "data", title: "Vendor / Vendor Control TPT",
+        count: vendorCount, pct: fmtPct(vendorCount), amount: byCat.get("VENDOR")!.amount,
+        action: "Upload the BC Bank Account Ledger export for the BK Vendor Control account (HDFC412).",
+      });
+    }
+
+    const chequeCount = byCat.get("CHEQUE")?.count ?? 0;
+    if (chequeCount > 0) {
+      items.push({
+        tier: "manual", title: "Cheques (CHQ PAID-CTS)",
+        count: chequeCount, pct: fmtPct(chequeCount), amount: byCat.get("CHEQUE")!.amount,
+        action: "Cheques don't have a settlement file — match manually against the corresponding vendor / staff payment voucher.",
+      });
+    }
+
+    const neftCount = byCat.get("NEFT_OTHER")?.count ?? 0;
+    if (neftCount === 0) {
+      const oth = byCat.get("OTHER");
+      if (oth && oth.count > 0) {
+        items.push({
+          tier: "manual", title: "Other (generic NEFT / RTGS, FT, etc.)",
+          count: oth.count, pct: fmtPct(oth.count), amount: oth.amount,
+          action: "Mixed — RTGS/NEFT vendor payments or non-HDFC originated credits. Spot-check Sheet 3 for the dominant pattern.",
+        });
+      }
+    }
+
+    const salaryCount = byCat.get("SALARY")?.count ?? 0;
+    if (salaryCount > 0) {
+      items.push({
+        tier: "manual", title: "Salary",
+        count: salaryCount, pct: fmtPct(salaryCount), amount: byCat.get("SALARY")!.amount,
+        action: "Match manually against the salary voucher in BC.",
+      });
+    }
+
+    items.sort((a, b) => b.count - a.count);
+    return { total, items };
   }, [result, settlementFiles, salesInvoiceFile]);
 
   return (
@@ -452,21 +517,46 @@ export default function Home() {
               <StatCard label="Unmatched BC" value={result.stats.unmatchedBC} variant="error" icon={XCircle} />
             </div>
 
-            {upgradeSuggestions.length > 0 && (
-              <div className="mb-5 rounded-xl border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4">
-                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100 mb-2">
-                  Push match % higher — add these files and rerun:
-                </p>
-                <ul className="space-y-1.5">
-                  {upgradeSuggestions.map((s, i) => (
-                    <li key={i} className="text-sm text-amber-900 dark:text-amber-100 flex items-start gap-2">
-                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-600 dark:bg-amber-300 mt-2 flex-shrink-0" />
-                      <div>
-                        <strong>{s.label}</strong> — could clear up to {s.count} unmatched bank lines (~{s.estPct}% lift). {s.missing}.
+            {missingReport && missingReport.items.length > 0 && (
+              <div className="mb-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">What's missing & how to close it</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      Every unmatched bank line, grouped by category, with the specific file or action that would clear it.
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {missingReport.items.map((s, i) => {
+                    const tierColor =
+                      s.tier === "data" ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900 text-amber-900 dark:text-amber-100" :
+                      s.tier === "workflow" ? "bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-900 text-blue-900 dark:text-blue-100" :
+                      "bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-700 dark:text-slate-300";
+                    const tierLabel =
+                      s.tier === "data" ? "ACTION" :
+                      s.tier === "workflow" ? "WORKFLOW" : "MANUAL";
+                    return (
+                      <div key={i} className={`rounded-lg border p-3 ${tierColor}`}>
+                        <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                          <div className="flex items-baseline gap-2 min-w-0">
+                            <span className="text-[10px] font-bold tracking-wider opacity-70">{tierLabel}</span>
+                            <strong className="text-sm">{s.title}</strong>
+                          </div>
+                          <div className="text-xs tabular-nums opacity-90 flex-shrink-0">
+                            <strong>{s.count}</strong> lines · ₹{s.amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })} · ~{s.pct}% of bank entries
+                          </div>
+                        </div>
+                        <p className="text-xs mt-1.5 opacity-90">{s.action}</p>
                       </div>
-                    </li>
-                  ))}
-                </ul>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-3">
+                  <strong>ACTION</strong> = upload a file or BC export to auto-close these.
+                  <strong className="ml-2">WORKFLOW</strong> = depends on accounting workflow (cash deposit timing, etc.).
+                  <strong className="ml-2">MANUAL</strong> = no auto-match possible, review Sheet 3 of the Excel.
+                </p>
               </div>
             )}
 

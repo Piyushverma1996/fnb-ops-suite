@@ -134,6 +134,10 @@ export function classifyBank(narr: string): BankCategory {
   if (n.includes("NEFT") && n.includes("DINEOUT")) return "DINEOUT";
   if (n.includes("IB FUNDS TRANSFER CR")) return "INTERNAL_CR";
   if (n.includes("IB FUNDS TRANSFER DR")) return "INTERNAL_DR";
+  // Also recognise the short-form "FT - CR -" / "FT - DR -" pattern used for
+  // transfers between the outlet's main account and the HDFC-OD overdraft.
+  if (/^FT\s*-\s*CR/i.test(n)) return "INTERNAL_CR";
+  if (/^FT\s*-\s*DR/i.test(n)) return "INTERNAL_DR";
   if (n.includes("PHONEPE") || n.includes("PHONE PE")) return "PHONEPE";
   if (n.includes("PAYTM")) return "PAYTM";
   if (n.includes("GPAY") || n.includes("GOOGLE PAY")) return "GPAY";

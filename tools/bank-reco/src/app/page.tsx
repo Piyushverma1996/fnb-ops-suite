@@ -10,7 +10,7 @@ import { MultiFileDropzone } from "@/components/multi-file-dropzone";
 import { StatCard } from "@/components/stat-card";
 import { ResultsTabs } from "@/components/results-tabs";
 import {
-  parseBankStatement, parseBCLedger,
+  parseBankStatement, parseBCLedgerSplit,
   sniffBCLedger, sniffBankStatement, type BCMeta,
 } from "@/lib/parsers";
 import { runMatch, type MatchResult, type BankEntry, type SettlementInput, type CashInvoiceInput } from "@/lib/matcher";
@@ -21,6 +21,7 @@ import { downloadReport } from "@/lib/export";
 export default function Home() {
   const [bankFile, setBankFile] = useState<File | null>(null);
   const [bcFile, setBcFile] = useState<File | null>(null);
+  const [extraBcFiles, setExtraBcFiles] = useState<File[]>([]);
   const [settlementFiles, setSettlementFiles] = useState<File[]>([]);
   const [settlementSummary, setSettlementSummary] = useState<{ count: number; totalNet: number; aggregator: string } | null>(null);
   const [salesInvoiceFile, setSalesInvoiceFile] = useState<File | null>(null);
@@ -123,7 +124,23 @@ export default function Home() {
     setRunning(true); setError(null); setResult(null);
     try {
       const bank = await parseBankStatement(bankFile);
-      const bc = await parseBCLedger(bcFile, outlet || undefined);
+      const { primary: bc, cross: crossBC } = await parseBCLedgerSplit(bcFile, outlet || undefined);
+      // Pull cross-outlet entries from any additional BC files the user
+      // uploaded — every entry from these files whose branch ≠ selected
+      // branch joins the T7 pool. Each file gets independent BCEntry IDs;
+      // we re-id below.
+      for (const f of extraBcFiles) {
+        try {
+          const split = await parseBCLedgerSplit(f, outlet || undefined);
+          // Treat both buckets as "cross" because the selected outlet's
+          // primary is whatever the user explicitly chose in the first file.
+          crossBC.push(...split.primary, ...split.cross);
+        } catch (e) {
+          console.warn(`Failed to parse extra BC file ${f.name}`, e);
+        }
+      }
+      // Re-id the merged cross-outlet pool
+      crossBC.forEach((c, i) => { c.id = i; });
       // Parse YYYY-MM-DD as local midnight so they line up with parsed
       // cell dates (which are also normalised to local midnight).
       const [fy, fm, fd] = dateFrom.split("-").map(Number);
@@ -162,6 +179,9 @@ export default function Home() {
           console.warn("Failed to parse Sales Invoices", e);
         }
       }
+      // Cross-outlet BC entries: limit by the same date window so the T7 pool
+      // doesn't include irrelevant FY data.
+      const crossBCF = crossBC.filter(c => c.postingDate >= from && c.postingDate <= to);
       const res = runMatch(bankF, bcF, {
         dateToleranceDays: dateTol,
         amountTolerance: amountTol,
@@ -169,6 +189,7 @@ export default function Home() {
         settlements: settlements.length > 0 ? settlements : undefined,
         cashInvoices: cashInvoices.length > 0 ? cashInvoices : undefined,
         outletCode: outlet,
+        crossOutletBC: crossBCF.length > 0 ? crossBCF : undefined,
       });
       setResult(res);
       setFilteredBank(bankF);
@@ -179,7 +200,7 @@ export default function Home() {
     } finally {
       setRunning(false);
     }
-  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta, settlementFiles, salesInvoiceFile]);
+  }, [bankFile, bcFile, outlet, dateFrom, dateTo, dateTol, amountTol, maxComp, bcMeta, settlementFiles, salesInvoiceFile, extraBcFiles]);
 
   const matchPct = result?.stats.matchPct ?? 0;
   const matchHealthText = useMemo(() => {
@@ -266,6 +287,18 @@ export default function Home() {
               subtitle="Bank Account Ledger Entries (.xlsx)"
               file={bcFile}
               onChange={setBcFile}
+            />
+          </div>
+          <div className="mt-3">
+            <MultiFileDropzone
+              label="Other outlets' BC bank ledgers (optional)"
+              subtitle="Additional BC export files — unlocks T7 inter-outlet IB FUNDS TRANSFER matching"
+              accept={{
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+                "application/vnd.ms-excel": [".xls"],
+              }}
+              files={extraBcFiles}
+              onChange={setExtraBcFiles}
             />
           </div>
           <div className="mt-3">

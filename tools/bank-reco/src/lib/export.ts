@@ -88,6 +88,8 @@ export function downloadReport(
         ? `Create BR voucher: Net ₹${m.settlement.netPayout.toFixed(2)} (${m.settlement.aggregator} UTR ${m.settlement.utr})`
         : m.tier === "T6" && m.cashBucket
         ? `Create cash deposit voucher: ${m.cashBucket.invoiceCount} cash bills from ${m.cashBucket.invoiceDate} totaling ₹${m.cashBucket.bucketTotal.toFixed(2)}`
+        : m.tier === "T7" && m.crossOutlet
+        ? `Inter-outlet: pair this bank line with voucher ${m.crossOutlet.counterpartyDocNo} on ${m.crossOutlet.counterpartyOutlet} BC ledger (${fmtDate(m.crossOutlet.counterpartyDate)})`
         : m.bcDocs,
     "Type": humanCategory(m.category),
     "Bank line (for reference)": shortenNarration(m.bankNarration),
@@ -290,6 +292,29 @@ export function downloadReport(
     const s8 = XLSX.utils.json_to_sheet(t6Rows);
     applyColWidths(s8, [4, 7, 12, 13, 14, 8, 13, 11, 8, 60, 60]);
     XLSX.utils.book_append_sheet(wb, s8, "8 Cash Deposits");
+  }
+
+  // ───── Inter-outlet matches (T7) — extra sheet if any ─────
+  const t7 = ordered.filter(m => m.tier === "T7" && m.crossOutlet);
+  if (t7.length > 0) {
+    const t7Rows = t7.map((m, i) => {
+      const x = m.crossOutlet!;
+      return {
+        "#": i + 1,
+        "Done": "",
+        "Bank Date": fmtDate(m.bankDate),
+        "Amount": m.bankAmount,
+        "Dir": m.direction === "Credit" ? "CR" : "DR",
+        "Counterparty Outlet": x.counterpartyOutlet,
+        "Counterparty Doc No": x.counterpartyDocNo,
+        "Counterparty Date": fmtDate(x.counterpartyDate),
+        "Counterparty Description": x.counterpartyDescription,
+        "Bank Narration": shortenNarration(m.bankNarration),
+      };
+    });
+    const s9 = XLSX.utils.json_to_sheet(t7Rows);
+    applyColWidths(s9, [4, 7, 12, 13, 5, 20, 26, 14, 50, 60]);
+    XLSX.utils.book_append_sheet(wb, s9, "9 Inter-outlet Matches");
   }
 
   // ───── Sheet 6: All Matches (raw detail) ─────

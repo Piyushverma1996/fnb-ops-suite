@@ -13,6 +13,9 @@ import {
 import { parseSwiggyText, parseZomatoUtrText } from "../src/lib/settlement.ts";
 import { parseSalesInvoicesBuffer } from "../src/lib/sales-invoices.ts";
 
+// Pre-load every BC file we have for T7 cross-outlet pool
+const ALL_BC_DIR = `C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data/Bank account ledger entries`;
+
 const SRC = "C:/Users/HP/Downloads/Dynamic Sale working/00 Source Data";
 const BANK_DIR = `${SRC}/Bank Reco statements`;
 const BC_DIR = `${SRC}/Bank account ledger entries`;
@@ -98,6 +101,24 @@ function parseBC(buf: Buffer, br: string): BCEntry[] {
   }
   return out;
 }
+function parseBCCross(buf: Buffer, primaryBranch: string): BCEntry[] {
+  const wb = XLSX.read(buf, { type: "buffer", cellDates: true });
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]], { defval: null });
+  const out: BCEntry[] = []; let id = 0;
+  for (const row of rows) {
+    const d = fixDate(row["Posting Date"]);
+    if (!d) continue;
+    const bc = String(row["Branch Code"] ?? "").toUpperCase().trim();
+    if (!bc || bc === primaryBranch.toUpperCase()) continue;
+    const amount = toNum(row["Amount"]);
+    if (amount === 0) continue;
+    out.push({ id: id++, postingDate: d, documentType: String(row["Document Type"] ?? ""),
+      documentNo: String(row["Document No."] ?? ""), description: String(row["Description"] ?? ""),
+      branchCode: bc, amount, direction: amount > 0 ? "Credit" : "Debit",
+      absAmount: round2(Math.abs(amount)), category: classifyBC(String(row["Description"] ?? "")) });
+  }
+  return out;
+}
 
 // Load every settlement file once
 const settlements: SettlementInput[] = [];
@@ -123,10 +144,10 @@ const from = new Date(fy, fm - 1, fd);
 const to = new Date(ty, tm - 1, td, 23, 59, 59);
 
 console.log(`\nSunday E2E sweep: ${cases.length} outlets, all inputs, ${FROM} → ${TO}\n`);
-console.log("Outlet  Bank  BC   Match  Pct      T1/T2/T3/T4/T5/T6   Invariants");
+console.log("Outlet  Bank  BC   Match  Pct      T1/T2/T3/T4/T5/T6/T7  Invariants");
 console.log("-".repeat(110));
 
-const results: { outlet: string; matchPct: number; matches: number; t5: number; t6: number; issues: string[] }[] = [];
+const results: { outlet: string; matchPct: number; matches: number; t5: number; t6: number; t7: number; issues: string[] }[] = [];
 
 for (const c of cases) {
   const bankPath = path.join(BANK_DIR, c.bank);
@@ -136,11 +157,21 @@ for (const c of cases) {
   const bc0 = parseBC(fs.readFileSync(bcPath), c.outlet);
   const bank = bank0.filter(b => b.date >= from && b.date <= to).map((b, i) => ({ ...b, id: i }));
   const bc = bc0.filter(x => x.postingDate >= from && x.postingDate <= to).map((x, i) => ({ ...x, id: i }));
+  // Build cross-outlet pool from every BC file the user has
+  const crossBC: BCEntry[] = [];
+  if (fs.existsSync(ALL_BC_DIR)) {
+    for (const f of fs.readdirSync(ALL_BC_DIR).filter(x => x.endsWith(".xlsx"))) {
+      crossBC.push(...parseBCCross(fs.readFileSync(`${ALL_BC_DIR}/${f}`), c.outlet));
+    }
+  }
+  const crossBCF = crossBC.filter(x => x.postingDate >= from && x.postingDate <= to);
+  crossBCF.forEach((x, i) => { x.id = i; });
   const r = runMatch(bank, bc, {
     dateToleranceDays: 2, amountTolerance: 1.0, maxComponents: 100,
     settlements, cashInvoices, outletCode: c.outlet,
+    crossOutletBC: crossBCF.length > 0 ? crossBCF : undefined,
   });
-  const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0 };
+  const tiers = { T1: 0, T2: 0, T3: 0, T4: 0, T5: 0, T6: 0, T7: 0 };
   for (const m of r.matches) tiers[m.tier]++;
 
   // Invariant checks
@@ -165,10 +196,10 @@ for (const c of cases) {
   // (d) matched count consistency
   if (r.stats.matchedBank !== bankIdsSeen.size) issues.push(`matchedBank count mismatch`);
 
-  const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}/${tiers.T6}`;
+  const tierStr = `${tiers.T1}/${tiers.T2}/${tiers.T3}/${tiers.T4}/${tiers.T5}/${tiers.T6}/${tiers.T7}`;
   const invariantTag = issues.length === 0 ? "OK" : `FAIL: ${issues.join(", ")}`;
   console.log(`${c.outlet.padEnd(7)} ${String(bank.length).padStart(4)} ${String(bc.length).padStart(4)} ${String(r.stats.matchedBank).padStart(4)}   ${String(r.stats.matchPct).padStart(5)}%  ${tierStr.padEnd(19)} ${invariantTag}`);
-  results.push({ outlet: c.outlet, matchPct: r.stats.matchPct, matches: r.matches.length, t5: tiers.T5, t6: tiers.T6, issues });
+  results.push({ outlet: c.outlet, matchPct: r.stats.matchPct, matches: r.matches.length, t5: tiers.T5, t6: tiers.T6, t7: tiers.T7, issues });
 }
 
 console.log();
@@ -176,7 +207,9 @@ const t5Total = results.reduce((s, r) => s + r.t5, 0);
 const t6Total = results.reduce((s, r) => s + r.t6, 0);
 const meanMatch = results.length ? results.reduce((s, r) => s + r.matchPct, 0) / results.length : 0;
 const anyIssues = results.flatMap(r => r.issues);
+const t7Total = results.reduce((s, r) => s + r.t7, 0);
 console.log(`Total T5 matches: ${t5Total}`);
 console.log(`Total T6 matches: ${t6Total}`);
+console.log(`Total T7 matches: ${t7Total}`);
 console.log(`Mean match%: ${meanMatch.toFixed(1)}%`);
 console.log(`Invariant failures: ${anyIssues.length === 0 ? "NONE ✓" : anyIssues.join("; ")}`);

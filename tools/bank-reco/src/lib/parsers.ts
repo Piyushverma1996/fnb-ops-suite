@@ -101,24 +101,38 @@ export async function sniffBankStatement(file: File): Promise<{ minDate: Date | 
 }
 
 export async function parseBCLedger(file: File, branchFilter?: string): Promise<BCEntry[]> {
+  const { primary } = await parseBCLedgerSplit(file, branchFilter);
+  return primary;
+}
+
+/**
+ * Parse a BC export, splitting the entries into:
+ *   primary  — entries matching branchFilter (or all if no filter)
+ *   cross    — entries from OTHER branches in the same file. Used by T7 to
+ *              find the contra voucher when an IB FUNDS TRANSFER bank line
+ *              pairs against another outlet's ledger.
+ */
+export async function parseBCLedgerSplit(file: File, branchFilter?: string): Promise<{ primary: BCEntry[]; cross: BCEntry[] }> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: null });
-  const entries: BCEntry[] = [];
-  let id = 0;
+  const primary: BCEntry[] = [];
+  const cross: BCEntry[] = [];
+  let pid = 0;
+  let cid = 0;
   for (const row of rows) {
     const pd = row["Posting Date"];
     if (!pd) continue;
     const date = parseDate(pd);
     if (!date) continue;
-    const branchCode = row["Branch Code"] ? String(row["Branch Code"]) : "";
-    if (branchFilter && branchCode.toUpperCase() !== branchFilter.toUpperCase()) continue;
+    const branchCode = row["Branch Code"] ? String(row["Branch Code"]).trim() : "";
     const amount = toNum(row["Amount"]);
     if (amount === 0) continue;
     const description = String(row["Description"] || "");
-    entries.push({
-      id: id++,
+    const isPrimary = !branchFilter || branchCode.toUpperCase() === branchFilter.toUpperCase();
+    const entry: BCEntry = {
+      id: isPrimary ? pid++ : cid++,
       postingDate: date,
       documentType: row["Document Type"] ? String(row["Document Type"]) : "",
       documentNo: String(row["Document No."] || ""),
@@ -128,9 +142,11 @@ export async function parseBCLedger(file: File, branchFilter?: string): Promise<
       direction: amount > 0 ? "Credit" : "Debit",
       absAmount: round2(Math.abs(amount)),
       category: classifyBC(description),
-    });
+    };
+    if (isPrimary) primary.push(entry);
+    else if (branchCode) cross.push(entry); // skip rows with blank branch — they'd never identify a counterparty
   }
-  return entries;
+  return { primary, cross };
 }
 
 // helpers

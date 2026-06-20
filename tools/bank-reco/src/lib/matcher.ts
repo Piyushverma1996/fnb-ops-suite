@@ -48,7 +48,7 @@ export type BCCategory =
 export type Match = {
   bankId: number;
   bcIds: number[];
-  tier: "T1" | "T2" | "T3" | "T4" | "T5" | "T6";
+  tier: "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7";
   tierLabel: string;
   confidence: number;
   bankDate: Date;
@@ -62,6 +62,15 @@ export type Match = {
   direction: "Credit" | "Debit";
   settlement?: SettlementHit;
   cashBucket?: CashBucketHit;
+  crossOutlet?: CrossOutletHit;
+};
+
+export type CrossOutletHit = {
+  counterpartyOutlet: string;     // e.g. "AV", or full name from rest-id-map
+  counterpartyBranch: string;     // raw branch code as it appeared in BC
+  counterpartyDocNo: string;
+  counterpartyDescription: string;
+  counterpartyDate: Date;
 };
 
 export type CashBucketHit = {
@@ -383,6 +392,10 @@ export type MatchOptions = {
   settlements?: SettlementInput[];
   cashInvoices?: CashInvoiceInput[];
   outletCode?: string;
+  // BC entries from OTHER branches in the same export (or additional uploaded
+  // BC files). Used by T7 to find contra vouchers for IB FUNDS TRANSFER bank
+  // lines that pair against another outlet's ledger.
+  crossOutletBC?: BCEntry[];
 };
 
 /** A single cash-payment Sales Invoice, used for T6 deposit matching. */
@@ -539,6 +552,67 @@ export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOpti
       };
       matches.push(m);
       bankUsed.add(b.id);
+    }
+  }
+
+  // ---- Tier 7: Cross-outlet inter-outlet transfer match ----
+  //
+  // For each unmatched IB FUNDS TRANSFER bank line (categorised as
+  // INTERNAL_CR / INTERNAL_DR), the bank narration carries the *other*
+  // outlet's HDFC account number. If the user uploaded a multi-branch BC
+  // file (or several BC files), the counter-voucher will live on that
+  // other outlet's ledger — opposite direction, same amount, within the
+  // date window.
+  if (opts.crossOutletBC && opts.crossOutletBC.length > 0) {
+    const crossUsed = new Set<number>();
+    for (const b of bankAll) {
+      if (bankUsed.has(b.id)) continue;
+      if (b.category !== "INTERNAL_CR" && b.category !== "INTERNAL_DR") continue;
+      const expectedDir: "Credit" | "Debit" = b.direction === "Credit" ? "Debit" : "Credit";
+      const tol = opts.dateToleranceDays;
+      const candidates = opts.crossOutletBC.filter(c =>
+        !crossUsed.has(c.id) &&
+        c.direction === expectedDir &&
+        Math.abs(c.absAmount - b.absAmount) <= opts.amountTolerance &&
+        withinDays(c.postingDate, b.date, tol),
+      );
+      if (candidates.length === 0) continue;
+      // Prefer the candidate whose date is closest to the bank date.
+      candidates.sort((x, y) =>
+        Math.abs(x.postingDate.getTime() - b.date.getTime()) -
+        Math.abs(y.postingDate.getTime() - b.date.getTime()),
+      );
+      const c = candidates[0];
+      const counterparty = c.branchCode || "(unknown)";
+      matches.push({
+        bankId: b.id,
+        // T7 references a cross-outlet BC entry which lives in a different
+        // ID space from the primary BC (bcAll). Keep bcIds empty so the
+        // primary-BC duplicate-id invariant stays intact; all the routing
+        // info needed for the action plan lives in the crossOutlet field.
+        bcIds: [],
+        tier: "T7",
+        tierLabel: `T7: Inter-outlet match (${counterparty})`,
+        confidence: 92,
+        bankDate: b.date,
+        bcDate: c.postingDate,
+        bankAmount: b.absAmount,
+        bcSumAmount: c.absAmount,
+        bankNarration: b.narration,
+        bcDocs: `[${counterparty}] ${c.documentNo}`,
+        bcDescriptions: c.description,
+        category: b.category,
+        direction: b.direction,
+        crossOutlet: {
+          counterpartyOutlet: counterparty,
+          counterpartyBranch: c.branchCode || "",
+          counterpartyDocNo: c.documentNo,
+          counterpartyDescription: c.description,
+          counterpartyDate: c.postingDate,
+        },
+      });
+      bankUsed.add(b.id);
+      crossUsed.add(c.id);
     }
   }
 

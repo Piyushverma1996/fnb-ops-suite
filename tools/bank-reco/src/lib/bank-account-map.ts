@@ -8,41 +8,44 @@
  * counter-party outlet name, so the accountant can look up the matching
  * voucher on the other outlet's BC ledger.
  */
-type AccountRow = { code: string; name: string; account: string };
+// Each row maps a BC bank-account code/label to one OR more raw HDFC account
+// numbers — some accounts appear in bank narrations under more than one
+// number (e.g. PV: bank-master row stored 50200047521810 but actual debits
+// resolve as 50200045030891; GGN51: master truncates the leading zero).
+type AccountRow = { code: string; name: string; accounts: string[] };
 
 const BANK_ACCOUNTS: AccountRow[] = [
-  { code: "HDFC005",  name: "TRADE",            account: "50200073808005" },
-  { code: "HDFC035",  name: "L-10",             account: "50200105650035" },
-  { code: "HDFC124",  name: "SN",               account: "50200078174124" },
-  { code: "HDFC146",  name: "Dwarka",           account: "50200097599146" },
-  { code: "HDFC160",  name: "TN",               account: "50200046932160" },
-  { code: "HDFC189",  name: "RG",               account: "50200046834189" },
-  { code: "HDFC190",  name: "NSP",              account: "50200062099190" },
-  { code: "HDFC230",  name: "MUS",              account: "50200068440230" },
-  { code: "HDFC321",  name: "CP",               account: "50200046912321" },
-  { code: "HDFC340",  name: "GOA",              account: "50200088323340" },
-  { code: "HDFC380",  name: "GGN51",            account: "5020106558380"  },
-  { code: "HDFC412",  name: "BK Vendor Control",account: "50200070730412" },
-  { code: "HDFC460",  name: "LN",               account: "50200043172460" },
-  { code: "HDFC574",  name: "AV",               account: "50200044492574" },
-  { code: "HDFC670",  name: "N Block CP",       account: "50200076461670" },
-  { code: "HDFC699",  name: "DBG",              account: "50200046806699" },
-  { code: "HDFC711",  name: "MN",               account: "50200047838711" },
-  { code: "HDFC712",  name: "SDA",              account: "50200059468712" },
-  { code: "HDFC723",  name: "DD",               account: "50200048672723" },
-  { code: "HDFC739",  name: "Utility",          account: "50200067780739" },
-  { code: "HDFC761",  name: "NP",               account: "50200046398761" },
-  { code: "HDFC793",  name: "EQUIPMENT",        account: "50200046398761" },
-  { code: "HDFC801",  name: "ASR",              account: "50200082329801" },
-  { code: "HDFC802",  name: "MR",               account: "50200075737802" },
-  { code: "HDFC810",  name: "KB",               account: "50200047521810" },
-  { code: "HDFC891",  name: "PV",               account: "50200047521810" },
-  { code: "HDFC8915", name: "HDFC-OD",          account: "50200084148915" },
-  { code: "HDFC902",  name: "HK",               account: "50200063164902" },
-  { code: "HDFC931",  name: "BBQ",              account: "50200075167931" },
-  { code: "HDFC950",  name: "Vendor Payments",  account: "50200069648950" },
-  { code: "HDFC962",  name: "RESERVE",          account: "50200073807962" },
-  { code: "HDFC976",  name: "GGN54",            account: "99910003101976" },
+  { code: "HDFC005",  name: "TRADE",            accounts: ["50200073808005"] },
+  { code: "HDFC035",  name: "L-10",             accounts: ["50200105650035"] },
+  { code: "HDFC124",  name: "SN",               accounts: ["50200078174124"] },
+  { code: "HDFC146",  name: "Dwarka",           accounts: ["50200097599146"] },
+  { code: "HDFC160",  name: "TN",               accounts: ["50200046932160"] },
+  { code: "HDFC189",  name: "RG",               accounts: ["50200046834189"] },
+  { code: "HDFC190",  name: "NSP",              accounts: ["50200062099190"] },
+  { code: "HDFC230",  name: "MUS",              accounts: ["50200068440230"] },
+  { code: "HDFC321",  name: "CP",               accounts: ["50200046912321"] },
+  { code: "HDFC340",  name: "GOA",              accounts: ["50200088323340"] },
+  { code: "HDFC380",  name: "GGN51",            accounts: ["50200106558380", "5020106558380"] },
+  { code: "HDFC412",  name: "BK Vendor Control",accounts: ["50200070730412"] },
+  { code: "HDFC460",  name: "LN",               accounts: ["50200043172460"] },
+  { code: "HDFC574",  name: "AV",               accounts: ["50200044492574"] },
+  { code: "HDFC670",  name: "N Block CP",       accounts: ["50200076461670"] },
+  { code: "HDFC699",  name: "DBG",              accounts: ["50200046806699"] },
+  { code: "HDFC711",  name: "MN",               accounts: ["50200047838711"] },
+  { code: "HDFC712",  name: "SDA",              accounts: ["50200059468712"] },
+  { code: "HDFC723",  name: "DD",               accounts: ["50200048672723"] },
+  { code: "HDFC739",  name: "Utility",          accounts: ["50200067780739"] },
+  { code: "HDFC761",  name: "NP",               accounts: ["50200046398761"] },
+  { code: "HDFC801",  name: "ASR",              accounts: ["50200082329801"] },
+  { code: "HDFC802",  name: "MR",               accounts: ["50200075737802"] },
+  { code: "HDFC810",  name: "KB",               accounts: ["50200047521810"] },
+  { code: "HDFC891",  name: "PV",               accounts: ["50200045030891", "50200047521810"] },
+  { code: "HDFC8915", name: "HDFC-OD",          accounts: ["50200084148915"] },
+  { code: "HDFC902",  name: "HK",               accounts: ["50200063164902"] },
+  { code: "HDFC931",  name: "BBQ",              accounts: ["50200075167931"] },
+  { code: "HDFC950",  name: "Vendor Payments",  accounts: ["50200069648950"] },
+  { code: "HDFC962",  name: "RESERVE",          accounts: ["50200073807962"] },
+  { code: "HDFC976",  name: "GGN54",            accounts: ["99910003101976"] },
 ];
 
 /**
@@ -53,11 +56,13 @@ const BANK_ACCOUNTS: AccountRow[] = [
 export function outletForAccountNo(accountNo: string): string | null {
   const trimmed = String(accountNo).replace(/\s+/g, "");
   if (trimmed.length < 10) return null;
-  const exact = BANK_ACCOUNTS.find(a => a.account === trimmed);
+  const exact = BANK_ACCOUNTS.find(a => a.accounts.includes(trimmed));
   if (exact) return exact.name;
-  // Fallback: longest-suffix or substring match (handles bank narrations that
-  // truncate the leading 502 prefix or pad with extra digits)
-  const found = BANK_ACCOUNTS.find(a => trimmed.includes(a.account) || a.account.includes(trimmed));
+  // Fallback: substring match in either direction (handles narrations that
+  // truncate or pad the number by one digit)
+  const found = BANK_ACCOUNTS.find(a =>
+    a.accounts.some(acc => trimmed.includes(acc) || acc.includes(trimmed)),
+  );
   return found?.name ?? null;
 }
 

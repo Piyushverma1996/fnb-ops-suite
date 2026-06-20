@@ -611,7 +611,10 @@ export function runMatch(bankAll: BankEntry[], bcAll: BCEntry[], opts: MatchOpti
       if (bankUsed.has(b.id)) continue;
       if (b.category !== "INTERNAL_CR" && b.category !== "INTERNAL_DR") continue;
       const expectedDir: "Credit" | "Debit" = b.direction === "Credit" ? "Debit" : "Credit";
-      const tol = opts.dateToleranceDays;
+      // Inter-outlet vouchers are often posted 3-5 days after the bank
+      // settles the transfer (accountant catches up at end of week). Use a
+      // wider window than the default for T7 only.
+      const tol = Math.max(opts.dateToleranceDays, 7);
       const candidates = opts.crossOutletBC.filter(c =>
         !crossUsed.has(c.id) &&
         c.direction === expectedDir &&

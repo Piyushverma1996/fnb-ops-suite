@@ -114,10 +114,8 @@ export function downloadReport(
     .slice()
     .sort((a, b) => a.date.getTime() - b.date.getTime())
     .map((b, i) => {
-      // For inter-outlet IB FUNDS TRANSFER lines, decode the account number
-      // in the narration and tell the accountant which outlet's BC ledger
-      // the counter-voucher will live in.
       let suggestion = "";
+      // (a) Inter-outlet transfers: decode account → outlet
       if (b.category === "INTERNAL_CR" || b.category === "INTERNAL_DR") {
         const other = outletFromNarration(b.narration);
         if (other) {
@@ -125,6 +123,29 @@ export function downloadReport(
             ? `Transfer from ${other} — check that outlet's BC ledger for the matching contra voucher`
             : `Transfer to ${other} — check that outlet's BC ledger for the matching contra voucher`;
         }
+      }
+      // (b) Aggregator-shaped narrations with no UTR match: tell user which
+      //     settlement file to download.
+      if (!suggestion) {
+        const upper = b.narration.toUpperCase();
+        const isSwiggy = upper.includes("SWIGGY") || upper.includes("BUNDL TECHNOLOGIES");
+        const isZomato = upper.includes("ZOMATO") || upper.includes("ETERNAL LIMITED");
+        if (isSwiggy || isZomato) {
+          // Pull a long alphanumeric token that looks like a UTR
+          const m = b.narration.match(/\b([A-Z]{4,}[0-9A-Z]{6,})\b/);
+          const utr = m?.[1];
+          const aggName = isSwiggy ? "Swiggy" : "Zomato";
+          const filename = isSwiggy ? "consolidate-annexure-orders" : "utr_report_mid";
+          if (utr) {
+            suggestion = `${aggName} settlement file missing for UTR ${utr} (${fmtDate(b.date)}). Download a ${aggName} ${filename}*.csv covering this date and rerun.`;
+          } else {
+            suggestion = `${aggName} settlement file missing for this period. Download the ${aggName} ${filename}*.csv and rerun.`;
+          }
+        }
+      }
+      // (c) Cash deposit with no T6 match: ask for the SI file
+      if (!suggestion && b.category === "CASH_DEPOSIT") {
+        suggestion = `Cash deposit not yet booked. Upload BC Sales Invoices export so the matcher can sum T-1 cash bills against this line.`;
       }
       return {
         "#": i + 1,

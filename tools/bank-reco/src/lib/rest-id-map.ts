@@ -30,7 +30,7 @@ export const OUTLET_TABLE: OutletRow[] = [
   { outletName: "Sandoz - Paschim vihar",        swiggyRid: "156822",  petpoojaRid: "106300", zomatoRid: "19070941" },
   { outletName: "Sandoz CP P Block",             swiggyRid: "21526",   petpoojaRid: "374587", zomatoRid: "18273629" },
   { outletName: "Sandoz DB Gupta Road",          swiggyRid: "55440",   petpoojaRid: "111947", zomatoRid: "1908" },
-  { outletName: "Sandoz Dwarka",                 swiggyRid: "893099",  petpoojaRid: "329922", zomatoRid: "" },
+  { outletName: "Sandoz Dwarka",                 swiggyRid: "893099",  petpoojaRid: "329922", zomatoRid: "21214865" },
   { outletName: "Sandoz gurgaon 54",             swiggyRid: "798381",  petpoojaRid: "147493", zomatoRid: "20885208" },
   { outletName: "Sandoz Mathura Road",           swiggyRid: "647311",  petpoojaRid: "99835",  zomatoRid: "20507636" },
   { outletName: "Sandoz Nehru Place",            swiggyRid: "238934",  petpoojaRid: "374590", zomatoRid: "19280557" },

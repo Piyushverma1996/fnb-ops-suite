@@ -82,7 +82,7 @@ export type CashBucketHit = {
 };
 
 export type SettlementHit = {
-  aggregator: "SWIGGY" | "ZOMATO";
+  aggregator: "SWIGGY" | "ZOMATO" | "AMEX" | "PHONEPE";
   utr: string;
   netPayout: number;
   orderCount: number;
@@ -408,7 +408,7 @@ export type CashInvoiceInput = {
 
 /** Slim view of a parsed settlement — passed in from settlement.ts. */
 export type SettlementInput = {
-  aggregator: "SWIGGY" | "ZOMATO";
+  aggregator: "SWIGGY" | "ZOMATO" | "AMEX" | "PHONEPE";
   utr: string;
   netPayout: number;
   rid: string;
@@ -770,12 +770,16 @@ function findSettlementMatch(
   }
 
   // Second pass: brand name + tight amount match (no UTR available)
-  const isSwiggy = upper.includes("SWIGGY") || upper.includes("BUNDL TECHNOLOGIES");
-  const isZomato = upper.includes("ZOMATO") || upper.includes("ETERNAL LIMITED");
+  const isSwiggy  = upper.includes("SWIGGY") || upper.includes("BUNDL TECHNOLOGIES");
+  const isZomato  = upper.includes("ZOMATO") || upper.includes("ETERNAL LIMITED");
+  const isAmex    = upper.includes("AMERICAN EXPRESS") || upper.includes("AMEX");
+  const isPhonepe = upper.includes("PHONEPE") || upper.includes("PHONE PE") || upper.includes("PHONEPELIMITED");
   for (const s of settlements) {
     if (Math.abs(s.netPayout - b.absAmount) > brandTol) continue;
-    if (isSwiggy && s.aggregator === "SWIGGY") return s;
-    if (isZomato && s.aggregator === "ZOMATO") return s;
+    if (isSwiggy  && s.aggregator === "SWIGGY") return s;
+    if (isZomato  && s.aggregator === "ZOMATO") return s;
+    if (isAmex    && s.aggregator === "AMEX") return s;
+    if (isPhonepe && s.aggregator === "PHONEPE") return s;
   }
   return null;
 }

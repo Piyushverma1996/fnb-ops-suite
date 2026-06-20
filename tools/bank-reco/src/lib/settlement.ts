@@ -15,7 +15,7 @@
 import * as XLSX from "xlsx";
 
 export type Settlement = {
-  aggregator: "SWIGGY" | "ZOMATO";
+  aggregator: "SWIGGY" | "ZOMATO" | "AMEX" | "PHONEPE";
   utr: string;
   netPayout: number;
   periodStart: Date | null;
@@ -59,16 +59,210 @@ export async function parseSettlementFile(file: File): Promise<Settlement[]> {
   const name = file.name.toLowerCase();
   if (name.endsWith(".csv")) {
     const text = await file.text();
-    const header = text.split(/\r?\n/, 1)[0] ?? "";
+    const first = text.split(/\r?\n/, 1)[0] ?? "";
+    // Strip BOM
+    const header = first.replace(/^﻿/, "");
     if (/utr_number\s*,\s*res_id/i.test(header)) return parseZomatoUtrText(text, file.name);
     if (/^RID\s*,\s*Order Date/i.test(header)) return parseSwiggyText(text, file.name);
+    if (/Merchant Id\s*,\s*Transaction Type/i.test(header)) return parsePhonePeText(text, file.name);
+    if (/^Merchant statement\b/i.test(header)) return parseAmexText(text, file.name);
     // Fallback: assume Swiggy
     return parseSwiggyText(text, file.name);
   }
   if (name.endsWith(".xlsx")) {
     return parseZomatoXLSX(file);
   }
+  if (name.endsWith(".xls")) {
+    // Some AmEx exports come as .xls — try to read with xlsx then dump CSV.
+    const buf = await file.arrayBuffer();
+    try {
+      const wb = XLSX.read(buf, { type: "buffer" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const csv = XLSX.utils.sheet_to_csv(sheet);
+      if (/^Merchant statement\b/i.test(csv)) return parseAmexText(csv, file.name);
+    } catch { /* fall through */ }
+  }
   return [];
+}
+
+// -------- PhonePe CSV --------
+//
+// Format: per-transaction rows. Header columns include "Merchant Id",
+// "Transaction Type", "Transaction UTR", "Total Transaction Amount",
+// "Transaction Date", "Transaction Status". We group SUCCESS/COMPLETED rows
+// by Transaction UTR — each UTR maps to one bank credit.
+export async function parsePhonePeCSV(file: File): Promise<Settlement[]> {
+  const text = await file.text();
+  return parsePhonePeText(text, file.name);
+}
+
+export function parsePhonePeText(text: string, source: string): Settlement[] {
+  const lines = text.split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const header = parseCSVLine(lines[0]);
+  const col = (name: string) => header.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+  const I = {
+    merchantId: col("Merchant Id"),
+    type:       col("Transaction Type"),
+    utr:        col("Transaction UTR"),
+    amount:     col("Total Transaction Amount"),
+    date:       col("Transaction Date"),
+    status:     col("Transaction Status"),
+  };
+  if (I.utr < 0 || I.amount < 0) return [];
+
+  // PhonePe gives one UTR per transaction (not per settlement batch). Bank
+  // NEFTs from PhonePe consolidate many transactions per day per outlet, so
+  // we group by (date × merchant) and sum — each bucket is one expected
+  // bank credit.
+  const groups = new Map<string, {
+    rid: string; orders: number; total: number;
+    date: Date | null;
+    sampleUtr: string;
+  }>();
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const row = parseCSVLine(line);
+    const utr = (row[I.utr] ?? "").trim();
+    const status = (row[I.status] ?? "").trim().toUpperCase();
+    if (status && status !== "COMPLETED" && status !== "SUCCESS") continue;
+    const rid = (row[I.merchantId] ?? "").trim();
+    const d = parsePhonePeDate(row[I.date] ?? "");
+    const dateKey = d ? `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}` : "(no-date)";
+    const key = `${rid}|${dateKey}`;
+    const cur = groups.get(key) ?? {
+      rid, orders: 0, total: 0, date: d, sampleUtr: utr,
+    };
+    cur.orders++;
+    cur.total += toNum(row[I.amount]);
+    groups.set(key, cur);
+  }
+
+  const out: Settlement[] = [];
+  for (const g of groups.values()) {
+    out.push({
+      aggregator: "PHONEPE",
+      utr: g.sampleUtr,
+      netPayout: Math.round(g.total * 100) / 100,
+      periodStart: g.date,
+      periodEnd: g.date,
+      rid: g.rid,
+      orderCount: g.orders,
+      grossSales: Math.round(g.total * 100) / 100,
+      totalCommission: 0,
+      totalGstFees: 0,
+      totalTcs: 0,
+      totalTds: 0,
+      source,
+    });
+  }
+  return out;
+}
+
+function parsePhonePeDate(s: string): Date | null {
+  // PhonePe format: "2026-06-19 23:59:58"
+  const m = s.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  return parseDate(s);
+}
+
+// -------- AmEx CSV --------
+//
+// AmEx Merchant Statement is multi-section. We skip everything until the
+// "Settlements" heading and parse the rows until the next blank line or the
+// "Submissions" heading. One row per settlement date with these columns:
+//   Settlement date, Settlement number, Total charges, Credits,
+//   Submission amount, Merchant Fees, Fees and incentives, Chargebacks,
+//   Adjustments, Held Funds, Settlement amount, CGST, SGST,
+//   Amount Paid To Bank
+//
+// "Amount Paid To Bank" is the figure that hits HDFC. No per-settlement UTR
+// in this file — match is by amount + date proximity.
+export async function parseAmexCSV(file: File): Promise<Settlement[]> {
+  const text = await file.text();
+  return parseAmexText(text, file.name);
+}
+
+export function parseAmexText(text: string, source: string): Settlement[] {
+  const lines = text.split(/\r?\n/);
+  // AmEx exports interleave many small "Settlements" sub-sections — one per
+  // settlement event. Each has its own column-header row followed by exactly
+  // one data row. We scan for every row whose first cell is "Settlement date"
+  // AND which contains "Amount Paid To Bank"; the next non-empty row is the
+  // settlement record.
+  const out: Settlement[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Look for the settlement column-header row (different from submissions
+    // which mention "Submission date" right after "Settlement date").
+    if (!/^Settlement date\b/i.test(line.trim())) continue;
+    if (!/Amount Paid To Bank/i.test(line)) continue;
+    const header = parseCSVLine(line);
+    const col = (...names: string[]): number => {
+      for (const n of names) {
+        const idx = header.findIndex(h => h.trim().toLowerCase() === n.toLowerCase());
+        if (idx >= 0) return idx;
+      }
+      return -1;
+    };
+    const I = {
+      date:  col("Settlement date"),
+      num:   col("Settlement number"),
+      gross: col("Submission amount", "Total charges"),
+      fees:  col("Merchant Fees"),
+      cgst:  col("CGST"),
+      sgst:  col("SGST"),
+      net:   col("Amount Paid To Bank", "Settlement amount"),
+    };
+    if (I.date < 0 || I.net < 0) continue;
+    // Find the next non-blank line — that's the data row
+    let dataIdx = -1;
+    for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
+      const t = lines[j].trim();
+      if (!t || /^[,\s]+$/.test(t)) continue;
+      dataIdx = j; break;
+    }
+    if (dataIdx < 0) continue;
+    const row = parseCSVLine(lines[dataIdx]);
+    const dateStr = (row[I.date] ?? "").trim();
+    const d = parseAmexDate(dateStr);
+    if (!d) continue;
+    const net = parseInrAmount(row[I.net]);
+    if (net === 0) continue;
+    const num = (row[I.num] ?? "").trim();
+    out.push({
+      aggregator: "AMEX",
+      utr: num,
+      netPayout: Math.round(net * 100) / 100,
+      periodStart: d,
+      periodEnd: d,
+      rid: "",
+      orderCount: 0,
+      grossSales: Math.round(parseInrAmount(row[I.gross]) * 100) / 100,
+      totalCommission: Math.round(Math.abs(parseInrAmount(row[I.fees])) * 100) / 100,
+      totalGstFees: Math.round((Math.abs(parseInrAmount(row[I.cgst])) + Math.abs(parseInrAmount(row[I.sgst]))) * 100) / 100,
+      totalTcs: 0,
+      totalTds: 0,
+      source,
+    });
+  }
+  return out;
+}
+
+function parseAmexDate(s: string): Date | null {
+  // AmEx format: "19/6/2026" or "19/06/2026"
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return new Date(+m[3], +m[2] - 1, +m[1]);
+}
+
+function parseInrAmount(s: unknown): number {
+  if (s == null || s === "" || s === "--") return 0;
+  // Strip "INR" prefix, commas, spaces, currency symbols
+  const cleaned = String(s).replace(/INR|₹|,|\s/gi, "").trim();
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
 }
 
 // -------- Swiggy CSV --------

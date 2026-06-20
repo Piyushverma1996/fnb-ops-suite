@@ -10,7 +10,7 @@ import {
   runMatch, classifyBank, classifyBC,
   type BankEntry, type BCEntry, type SettlementInput, type CashInvoiceInput,
 } from "../src/lib/matcher.ts";
-import { parseSwiggyText, parseZomatoUtrText } from "../src/lib/settlement.ts";
+import { parseSwiggyText, parseZomatoUtrText, parseAmexText, parsePhonePeText } from "../src/lib/settlement.ts";
 import { parseSalesInvoicesBuffer } from "../src/lib/sales-invoices.ts";
 
 // Pre-load every BC file we have for T7 cross-outlet pool
@@ -128,7 +128,19 @@ for (const f of fs.readdirSync(SWIGGY_DIR).filter(x => x.endsWith(".csv"))) {
 for (const f of fs.readdirSync(ZOMATO_DIR).filter(x => x.startsWith("utr_report_") && x.endsWith(".csv"))) {
   settlements.push(...parseZomatoUtrText(fs.readFileSync(`${ZOMATO_DIR}/${f}`, "utf-8"), f));
 }
-console.log(`Loaded ${settlements.length} settlements (Swiggy + Zomato)`);
+const AMEX_DIR = `${SRC}/Aggregator settlement reports/Amex`;
+const PHONEPE_DIR = `${SRC}/Aggregator settlement reports/Phonepe`;
+if (fs.existsSync(AMEX_DIR)) {
+  for (const f of fs.readdirSync(AMEX_DIR).filter(x => x.endsWith(".csv"))) {
+    settlements.push(...parseAmexText(fs.readFileSync(`${AMEX_DIR}/${f}`, "utf-8"), f));
+  }
+}
+if (fs.existsSync(PHONEPE_DIR)) {
+  for (const f of fs.readdirSync(PHONEPE_DIR).filter(x => x.endsWith(".csv"))) {
+    settlements.push(...parsePhonePeText(fs.readFileSync(`${PHONEPE_DIR}/${f}`, "utf-8"), f));
+  }
+}
+console.log(`Loaded ${settlements.length} settlements (Swiggy + Zomato + AmEx + PhonePe)`);
 
 // Cash invoices
 const siBuf = fs.readFileSync(SI_PATH);

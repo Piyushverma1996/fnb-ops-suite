@@ -61,55 +61,83 @@ function buildReportBuffer(
     return b.bankAmount - a.bankAmount;
   });
 
-  // ───── Sheet 0: How to Use ─────
-  const howTo = [
-    ["BANK RECONCILIATION — STEP BY STEP"],
-    [`Outlet: ${outletCode}    Period: ${dateFrom} → ${dateTo}`],
-    [],
-    ["VALUES TO TYPE INTO BC RECONCILIATION HEADER"],
-    ["Field", "Value"],
-    ["Bank Account No.",           "(pick the HDFC account for this outlet)"],
-    ["Statement No.",              "(next sequential, e.g. 04/26 for April 2026)"],
-    ["Statement Date",             dateTo],
-    ["Balance Last Statement",     openingBalance],
-    ["Statement Ending Balance",   endingBalance],
-    [],
-    ["WORKFLOW"],
-    ["#", "Step", "Where", "Time"],
-    [1, "Open BC → Bank Acc. Reconciliations → New",                                "BC",      "10 sec"],
-    [2, "Fill the 5 header fields above (see Sheet 5 Summary for daily detail)",    "BC",      "30 sec"],
-    [3, "Click into the empty Bank Statement Lines grid (first row, first cell)",   "BC",      "5 sec"],
-    [4, "Open Sheet 2 (BC Stmt Import), select rows 2 onwards (all data, NOT header)", "Excel", "5 sec"],
-    [5, "Copy (Ctrl+C) → switch to BC → Paste (Ctrl+V) — grid fills automatically", "BC",      "10 sec"],
-    [6, "Click Matching → Match Automatically. BC matches what it can.",            "BC",      "15 sec"],
-    [7, "Open Sheet 1 (Action Plan) — these are matches BC's auto-match may miss",  "Excel",   "—"],
-    [8, "For each row in Action Plan: in BC click that statement line → Matching → Match Manually → tick the BC Doc Nos listed → tick Done column in Excel", "Both", "~1 sec/row"],
-    [9, "Sheet 3 (Unmatched Bank) → create new BR vouchers in BC for these",        "BC",      "varies"],
-    [10, "Sheet 4 (Unmatched BC) → investigate (usually cross-month timing)",       "BC",      "varies"],
-    [11, "When Total Difference = 0 → Post the reconciliation",                     "BC",      "5 sec"],
-    [],
-    ["TIPS"],
-    ["·  T1 = 100% confidence (same date, same amount). Tick without checking."],
-    ["·  T2 = many BC docs sum to one bank line (still 95%+ confidence)."],
-    ["·  T3/T4 = date-tolerant. Quick sanity check before ticking."],
-    ["·  The Done column is just for your tracking — Excel doesn't push back to BC."],
-  ];
-  const sheet0 = XLSX.utils.aoa_to_sheet(howTo);
-  applyColWidths(sheet0, [6, 70, 12, 12]);
-  XLSX.utils.book_append_sheet(wb, sheet0, "0 How to Use");
-
-  // ───── Sheet 0a: What's Missing & How to Close It ─────
-  const missingRows = buildMissingReport(result);
+  // ───── Sheet 1: START HERE (workflow + header values + diagnostic) ─────
   const totalBank = result.stats.totalBank || 1;
   const matched = result.stats.matchedBank;
   const matchPct = result.stats.matchPct;
-  const missingHeader: (string | number)[][] = [
-    ["WHAT'S MISSING & HOW TO CLOSE IT"],
-    [`Outlet: ${outletCode}    Period: ${dateFrom} → ${dateTo}    Match: ${matched} / ${totalBank} (${matchPct}%)`],
+  const missingRows = buildMissingReport(result);
+  const t5Count = ordered.filter(m => m.tier === "T5").length;
+  const t6Count = ordered.filter(m => m.tier === "T6").length;
+  const t7Count = ordered.filter(m => m.tier === "T7").length;
+
+  const startHere: (string | number)[][] = [
+    [`BANK RECONCILIATION — ${outletCode}`],
+    [`Period: ${dateFrom} → ${dateTo}    Match: ${matched} / ${totalBank} (${matchPct}%)`],
     [],
-    ["Every unmatched bank line is grouped by category below. Each row tells you exactly",
-     "what file or action would clear those lines. ACTION = upload a file. WORKFLOW =",
-     "depends on accountant timing. MANUAL = no auto-match possible, handle row-by-row."],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 1.  BC HEADER VALUES — type these into the new reconciliation"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["Field", "Value"],
+    ["Bank Account No.",         "(pick the HDFC account for this outlet)"],
+    ["Statement No.",            `(next sequential, e.g. ${dateTo.slice(5,7)}/${dateTo.slice(2,4)})`],
+    ["Statement Date",           dateTo],
+    ["Balance Last Statement",   openingBalance],
+    ["Statement Ending Balance", endingBalance],
+    [],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 2.  PASTE STATEMENT LINES INTO BC"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["Open Sheet 2 (BC Stmt Import). Select rows 2 onwards (NOT the header). Ctrl+C."],
+    ["In BC, click the empty Bank Statement Lines grid → Ctrl+V. Done."],
+    [],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 3.  AUTO-MATCH IN BC (15 sec)"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["BC: Matching → Match Automatically. BC handles the obvious 1:1 cases."],
+    [],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 4.  WALK THE ACTION PLAN (Sheet 3) — the main work"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["For each row in Sheet 3 (Action Plan):"],
+    ["  - In BC, click that statement line → Matching → Match Manually"],
+    ["  - Tick the BC docs listed in column 'BC Doc(s) to Apply'"],
+    ["  - Mark 'Done' in the Excel sheet."],
+    ["  - T1 entries (100% confidence): tick without checking. ~1 sec/row."],
+    ["  - T2/T7 entries: same idea, confidence 92-95%."],
+    [],
+    ...(t5Count > 0 ? [
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      [`  STEP 5.  AGGREGATOR VOUCHERS (Sheet 4) — ${t5Count} BR vouchers to create`],
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      ["For each row in Sheet 4 (Aggregator Settlements):"] as (string | number)[],
+      ["  - Create one BR voucher for the bank line at the Net Payout amount"] as (string | number)[],
+      ["  - Plus journal entries for the deduction lines (Commission, GST, TCS, TDS)"] as (string | number)[],
+      ["  - The row gives you every number you need."] as (string | number)[],
+      [] as (string | number)[],
+    ] : []),
+    ...(t7Count > 0 ? [
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      [`  STEP 6.  INTER-OUTLET TRANSFERS (Sheet 5) — ${t7Count} pairings`],
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      ["For each row in Sheet 5 (Inter-outlet Matches):"] as (string | number)[],
+      ["  - The counterparty outlet + voucher number is given."] as (string | number)[],
+      ["  - In BC, find that voucher on the counterparty's BC ledger and confirm."] as (string | number)[],
+      ["  - Tick the bank line + that voucher."] as (string | number)[],
+      [] as (string | number)[],
+    ] : []),
+    ...(t6Count > 0 ? [
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      [`  STEP 7.  CASH DEPOSIT VOUCHERS (Sheet 6) — ${t6Count} vouchers to create`],
+      ["═════════════════════════════════════════════════════════════════"] as (string | number)[],
+      ["For each row in Sheet 6 (Cash Deposits):"] as (string | number)[],
+      ["  - Create one deposit voucher for the cash bills listed."] as (string | number)[],
+      [] as (string | number)[],
+    ] : []),
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 8.  REMAINING UNMATCHED — see what's blocking 100%"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["The diagnostic table below tells you EXACTLY which file or action would close each category."],
+    ["ACTION = upload a file. WORKFLOW = waiting on accountant timing. MANUAL = handle row-by-row."],
     [],
     ["Tier", "Category", "# Lines", "Total ₹", "% of bank", "What to do"],
     ...missingRows.map(r => [
@@ -120,12 +148,28 @@ function buildReportBuffer(
       `${r.pct}%`,
       r.action,
     ]),
+    [],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["  STEP 9.  POST THE RECONCILIATION"],
+    ["═════════════════════════════════════════════════════════════════"],
+    ["When Total Difference = 0 in BC → click Post."],
   ];
-  const sheet0a = XLSX.utils.aoa_to_sheet(missingHeader);
-  applyColWidths(sheet0a, [10, 36, 9, 14, 10, 80]);
-  XLSX.utils.book_append_sheet(wb, sheet0a, "0a What's Missing");
+  const sheet1Start = XLSX.utils.aoa_to_sheet(startHere);
+  applyColWidths(sheet1Start, [12, 38, 9, 14, 10, 80]);
+  XLSX.utils.book_append_sheet(wb, sheet1Start, "1 Start Here");
 
-  // ───── Sheet 1: Action Plan ─────
+  // ───── Sheet 2: BC Bank Statement Import (with UTR) ─────
+  const stmtImportRows = collectStatementLines(result).map(l => ({
+    "Transaction Date": fmtDate(l.date),
+    "UTR / Ref No": extractUTR(l.narration),
+    "Description": l.narration,
+    "Statement Amount": l.direction === "Credit" ? l.amount : -l.amount,
+  }));
+  const sheet2 = XLSX.utils.json_to_sheet(stmtImportRows);
+  applyColWidths(sheet2, [14, 22, 70, 16]);
+  XLSX.utils.book_append_sheet(wb, sheet2, "2 BC Stmt Import");
+
+  // ───── Sheet 3: Action Plan (tick-list, the main work) ─────
   const actionPlanRows = ordered.map((m, i) => ({
     "#": i + 1,
     "Done": "",
@@ -144,22 +188,9 @@ function buildReportBuffer(
     "Type": humanCategory(m.category),
     "Bank line (for reference)": shortenNarration(m.bankNarration),
   }));
-  const sheet1 = XLSX.utils.json_to_sheet(actionPlanRows);
-  applyColWidths(sheet1, [4, 7, 11, 14, 5, 6, 50, 16, 60]);
-  XLSX.utils.book_append_sheet(wb, sheet1, "1 Action Plan");
-
-  // ───── Sheet 2: BC Bank Statement Import ─────
-  // BC's "Suggest Lines" / "Import Bank Statement" feature accepts a flat list
-  // of statement lines. Generating this means accountant can skip the manual
-  // bank statement import step entirely.
-  const stmtImportRows = collectStatementLines(result).map(l => ({
-    "Transaction Date": fmtDate(l.date),
-    "Description": l.narration,
-    "Statement Amount": l.direction === "Credit" ? l.amount : -l.amount,
-  }));
-  const sheet2 = XLSX.utils.json_to_sheet(stmtImportRows);
-  applyColWidths(sheet2, [14, 70, 16]);
-  XLSX.utils.book_append_sheet(wb, sheet2, "2 BC Stmt Import");
+  const sheet3 = XLSX.utils.json_to_sheet(actionPlanRows);
+  applyColWidths(sheet3, [4, 7, 11, 14, 5, 6, 50, 16, 60]);
+  XLSX.utils.book_append_sheet(wb, sheet3, "3 Action Plan");
 
   // ───── Sheet 3: Unmatched Bank ─────
   const ubRows = result.unmatchedBank
@@ -211,9 +242,9 @@ function buildReportBuffer(
         "Note": "",
       };
     });
-  const sheet3 = XLSX.utils.json_to_sheet(ubRows);
-  applyColWidths(sheet3, [4, 7, 11, 14, 5, 16, 60, 70, 30]);
-  XLSX.utils.book_append_sheet(wb, sheet3, "3 Unmatched Bank");
+  const sheetUB = XLSX.utils.json_to_sheet(ubRows);
+  applyColWidths(sheetUB, [4, 7, 11, 14, 5, 16, 60, 70, 30]);
+  // Sheet 7 — inserted in final order below
 
   // ───── Sheet 4: Unmatched BC ─────
   const ucRows = result.unmatchedBC
@@ -232,7 +263,8 @@ function buildReportBuffer(
     }));
   const sheet4 = XLSX.utils.json_to_sheet(ucRows);
   applyColWidths(sheet4, [4, 7, 13, 14, 5, 22, 16, 50, 30]);
-  XLSX.utils.book_append_sheet(wb, sheet4, "4 Unmatched BC");
+  const sheetUC = sheet4; void sheetUC;
+  // Sheet 8 — inserted in final order below
 
   // ───── Sheet 5: Summary ─────
   const summaryHeader = [
@@ -281,7 +313,8 @@ function buildReportBuffer(
   ];
   const sheet5 = XLSX.utils.aoa_to_sheet(summaryHeader);
   applyColWidths(sheet5, [16, 16, 16, 16, 16, 12, 12]);
-  XLSX.utils.book_append_sheet(wb, sheet5, "5 Summary");
+  const sheetSummary = sheet5; void sheetSummary;
+  // Sheet 9 — inserted in final order below
 
   // ───── Aggregator Settlements (T5) — extra sheet if any ─────
   const t5 = ordered.filter(m => m.tier === "T5" && m.settlement);
@@ -317,7 +350,7 @@ function buildReportBuffer(
     });
     const s7 = XLSX.utils.json_to_sheet(t5Rows);
     applyColWidths(s7, [4, 7, 12, 13, 11, 28, 22, 22, 7, 16, 16, 16, 14, 14, 16, 11, 32]);
-    XLSX.utils.book_append_sheet(wb, s7, "7 Aggregator Settlements");
+    XLSX.utils.book_append_sheet(wb, s7, "4 Aggregator Settlements");
   }
 
   // ───── Cash Deposits (T6) — extra sheet if any ─────
@@ -341,7 +374,7 @@ function buildReportBuffer(
     });
     const s8 = XLSX.utils.json_to_sheet(t6Rows);
     applyColWidths(s8, [4, 7, 12, 13, 14, 8, 13, 11, 8, 60, 60]);
-    XLSX.utils.book_append_sheet(wb, s8, "8 Cash Deposits");
+    XLSX.utils.book_append_sheet(wb, s8, "6 Cash Deposits");
   }
 
   // ───── Inter-outlet matches (T7) — extra sheet if any ─────
@@ -364,7 +397,7 @@ function buildReportBuffer(
     });
     const s9 = XLSX.utils.json_to_sheet(t7Rows);
     applyColWidths(s9, [4, 7, 12, 13, 5, 20, 26, 14, 50, 60]);
-    XLSX.utils.book_append_sheet(wb, s9, "9 Inter-outlet Matches");
+    XLSX.utils.book_append_sheet(wb, s9, "5 Inter-outlet Matches");
   }
 
   // ───── Sheet 6: All Matches (raw detail) ─────
@@ -380,13 +413,45 @@ function buildReportBuffer(
     "BC Descriptions": m.bcDescriptions,
     "Category": m.category,
   }));
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allMatchedRows), "6 All Matches");
+  // Final ordering: sheets 4, 5, 6 (aggregator / inter-outlet / cash) are
+  // added conditionally above. Now insert 7, 8, 9, 10 in order.
+  XLSX.utils.book_append_sheet(wb, sheetUB, "7 Unmatched Bank");
+  XLSX.utils.book_append_sheet(wb, sheet4, "8 Unmatched BC");
+  XLSX.utils.book_append_sheet(wb, sheet5, "9 Summary");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(allMatchedRows), "10 All Matches");
 
   return XLSX.write(wb, { bookType: "xlsx", type: "array" }) as ArrayBuffer;
 }
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/**
+ * Pull a likely UTR / bank reference number out of a bank narration.
+ * Targets the common HDFC patterns seen in the Sandoz data:
+ *   - AXISCN1304413427           (Swiggy / Axis NEFT)
+ *   - CITIN26679282420           (Zomato / Citi NEFT)
+ *   - YESF26134                  (Swiggy YES Bank IMPS)
+ *   - HDFCR52026060165078625     (HDFC RTGS reference)
+ *   - 609146045038               (PhonePe IMPS — 12 digit numeric)
+ * Heuristic: pick the longest alpha-numeric token of length >=10 that
+ * starts with letters OR a 12+ digit numeric token. Falls back to "".
+ */
+function extractUTR(narration: string): string {
+  if (!narration) return "";
+  const up = narration.toUpperCase();
+  // Prefer prefixed alphanumeric refs (AXISCN, CITIN, YESF, HDFCR, INDR, etc.)
+  const alpha = up.match(/\b[A-Z]{4,}[0-9A-Z]{6,}\b/g);
+  if (alpha && alpha.length > 0) {
+    return alpha.reduce((longest, cur) => cur.length > longest.length ? cur : longest, "");
+  }
+  // Otherwise look for a 12+ digit numeric reference (PhonePe IMPS UTRs)
+  const num = up.match(/\b\d{12,}\b/g);
+  if (num && num.length > 0) {
+    return num.reduce((longest, cur) => cur.length > longest.length ? cur : longest, "");
+  }
+  return "";
 }
 
 /**

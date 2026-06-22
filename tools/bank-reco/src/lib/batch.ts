@@ -80,20 +80,35 @@ export async function pairFilesByOutlet(
 
   // Edge-case aliases from the actual BC data: bank filename gives one code
   // but BC stores transactions under a different branch code.
+  // The KEY is whatever leading-letter token we pulled off the bank filename.
+  // The VALUE is every branch code we should try to look up in the uploaded
+  // BC files. First match wins (we pick the one with the highest entry count).
   const FILENAME_TO_BC: Record<string, string[]> = {
-    DW: ["DWK"],
-    NSP: ["CNSP", "NSP"],
-    SN:  ["CSN", "SN"],
-    SDA: ["CSDA", "SDA"],
-    MUS: ["MS", "MUS"],
-    MU:  ["MS", "MU"],
+    DW:    ["DW", "DWK"],
+    DWK:   ["DW", "DWK"],            // file is DWK_9146-imp.xls, BC stores under "DW"
+    NSP:   ["CNSP", "NSP"],
+    SN:    ["CSN", "SN"],
+    SDA:   ["CSDA", "SDA"],
+    MUS:   ["MS", "MUS"],
+    MU:    ["MS", "MU"],
+    MT:    ["MN", "MT"],             // bank file MT_8711-imp.xls is Moti Nagar → BC "MN"
+    MN:    ["MN", "MT"],
     GGN51: ["CG", "MALL 51", "GGN51"],
     GGN54: ["GGN", "GGN54"],
-    ASR: ["AMRITSAR", "ASR"],
-    NB:  ["NB"],
-    MN:  ["MN"],
-    MT:  ["MT", "MN"],
-    CLB: ["CLB"],
+    GGN:   ["GGN", "CG", "MALL 51"], // EQ5793 → GGN54 outlet, BC "GGN"
+    EQ:    ["GGN", "CG"],
+    MALL:  ["MALL 51", "CG", "GGN51"], // Mall51_8380-imp.xls → MALL = filename code
+    MALL51:["MALL 51", "CG", "GGN51"],
+    ASR:   ["AMRITSAR", "ASR"],
+    AMH:   ["AMRITSAR", "ASR"],       // AMH_4623-imp.xls → Amritsar
+    AMR:   ["AMRITSAR", "ASR"],
+    AM:    ["AMRITSAR", "ASR"],
+    NB:    ["NB"],
+    CLB:   ["CLB"],
+    MIN:   ["LN"],                    // Min470-imp.xls → Lajpat Nagar (Minto Road?)
+    LP:    ["LP", "LB"],              // Leelaz Park / Banquets — try both
+    RS:    ["RS"],                    // unknown
+    GM:    ["GM"],                    // unknown
   };
 
   const jobs: OutletJob[] = [];

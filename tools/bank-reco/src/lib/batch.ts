@@ -5,6 +5,7 @@
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { parseBankStatement, parseBCLedgerSplit, sniffBCLedger } from "./parsers";
+import { outletForAccountSuffix } from "./bank-account-map";
 import {
   runMatch, type BankEntry, type BCEntry, type MatchResult,
   type SettlementInput, type CashInvoiceInput,
@@ -55,12 +56,20 @@ const BANK_FILENAME_OVERRIDES: Record<string, string> = {
 };
 
 export function outletCodeFromBankFilename(filename: string): string {
-  const base = filename.replace(/\.(xls|xlsx|csv)$/i, "");
-  // Strip "-imp" suffix
-  const noImp = base.replace(/-imp$/i, "");
-  // Take everything before first underscore or digit
-  const m = noImp.match(/^([A-Za-z]+)/);
-  const raw = (m?.[1] ?? noImp).toUpperCase();
+  // Strategy 1 (most reliable): pull the 3-4 digit suffix from the filename
+  // (e.g. DWK_9146-imp.xls → "9146", EQ5793-imp.xls → "5793") and reverse-
+  // lookup the HDFC account it belongs to. This handles ambiguous letter
+  // prefixes (EQ → EQUIPMENT not GGN, GM → GGN54, etc.).
+  const base = filename.replace(/\.(xls|xlsx|csv)$/i, "").replace(/-imp$/i, "");
+  const digitMatch = base.match(/(\d{3,5})$/);
+  if (digitMatch) {
+    const suffix = digitMatch[1];
+    const acct = outletForAccountSuffix(suffix);
+    if (acct) return acct.toUpperCase();
+  }
+  // Strategy 2 (fallback): take leading letters from the filename
+  const m = base.match(/^([A-Za-z]+)/);
+  const raw = (m?.[1] ?? base).toUpperCase();
   return BANK_FILENAME_OVERRIDES[raw] ?? raw;
 }
 
@@ -80,35 +89,61 @@ export async function pairFilesByOutlet(
 
   // Edge-case aliases from the actual BC data: bank filename gives one code
   // but BC stores transactions under a different branch code.
-  // The KEY is whatever leading-letter token we pulled off the bank filename.
-  // The VALUE is every branch code we should try to look up in the uploaded
-  // BC files. First match wins (we pick the one with the highest entry count).
+  // The KEY is the outlet code returned by outletCodeFromBankFilename. With
+  // the new suffix-based resolution, that key is usually the BC bank-account
+  // master label (DWARKA / EQUIPMENT / GGN54 / RESERVE etc.). FALLBACK keys
+  // (DW / NSP / SDA / etc.) are still here for filenames where the suffix
+  // couldn't be resolved.
   const FILENAME_TO_BC: Record<string, string[]> = {
-    DW:    ["DW", "DWK"],
-    DWK:   ["DW", "DWK"],            // file is DWK_9146-imp.xls, BC stores under "DW"
-    NSP:   ["CNSP", "NSP"],
-    SN:    ["CSN", "SN"],
-    SDA:   ["CSDA", "SDA"],
-    MUS:   ["MS", "MUS"],
-    MU:    ["MS", "MU"],
-    MT:    ["MN", "MT"],             // bank file MT_8711-imp.xls is Moti Nagar → BC "MN"
-    MN:    ["MN", "MT"],
-    GGN51: ["CG", "MALL 51", "GGN51"],
-    GGN54: ["GGN", "GGN54"],
-    GGN:   ["GGN", "CG", "MALL 51"], // EQ5793 → GGN54 outlet, BC "GGN"
-    EQ:    ["GGN", "CG"],
-    MALL:  ["MALL 51", "CG", "GGN51"], // Mall51_8380-imp.xls → MALL = filename code
-    MALL51:["MALL 51", "CG", "GGN51"],
-    ASR:   ["AMRITSAR", "ASR"],
-    AMH:   ["AMRITSAR", "ASR"],       // AMH_4623-imp.xls → Amritsar
-    AMR:   ["AMRITSAR", "ASR"],
-    AM:    ["AMRITSAR", "ASR"],
-    NB:    ["NB"],
-    CLB:   ["CLB"],
-    MIN:   ["LN"],                    // Min470-imp.xls → Lajpat Nagar (Minto Road?)
-    LP:    ["LP", "LB"],              // Leelaz Park / Banquets — try both
-    RS:    ["RS"],                    // unknown
-    GM:    ["GM"],                    // unknown
+    // bank-account-master labels (preferred path, set by outletForAccountSuffix)
+    DWARKA:    ["DW", "DWK", "DWARKA"],
+    AV:        ["AV"],
+    JR:        ["JR"],
+    TN:        ["JR", "TN"],                // HDFC160 labelled TN but bank file is JR_2160
+    RG:        ["RG"],
+    NP:        ["NP"],
+    DD:        ["DDB", "DD"],               // HDFC723 labelled DD; bank file is DDB_2723
+    PV:        ["PV"],
+    MR:        ["MR"],
+    NSP:       ["CNSP", "NSP"],
+    SN:        ["CSN", "SN"],
+    HK:        ["HK"],
+    KB:        ["KB"],
+    BBQ:       ["BBQ"],
+    LN:        ["LN"],
+    "L-10":    ["CLB"],
+    SDA:       ["CSDA", "SDA"],
+    MN:        ["MN", "MT"],
+    MUS:       ["MS", "MUS"],
+    AMRITSAR:  ["AMRITSAR", "ASR"],
+    GGN51:     ["CG", "MALL 51", "GGN51"],
+    GGN54:     ["GGN", "GGN54"],
+    EQUIPMENT: ["EQUIPMENT"],                // EQ5793 = EQUIPMENT, no matching BC outlet → won't pair
+    DBG:       ["DBG"],
+    DDB:       ["DDB"],
+    SS:        ["SS"],
+    "HDFC-OD": ["HO"],                       // OD account stores transactions under HO
+    "BK VENDOR CONTROL": ["HO"],
+    NB:        ["NB"],
+    CLB:       ["CLB"],
+    MT:        ["MN", "MT"],
+    "N BLOCK CP": ["NB"],
+
+    // Legacy filename-prefix fallbacks (in case suffix lookup misses)
+    DW:        ["DW", "DWK"],
+    DWK:       ["DW", "DWK"],
+    GGN:       ["GGN", "CG", "MALL 51"],
+    EQ:        ["EQUIPMENT", "GGN", "CG"],
+    GM:        ["GGN", "GGN54"],             // GM_1976-imp.xls = GGN54 (suffix 1976)
+    MALL:      ["MALL 51", "CG", "GGN51"],
+    MALL51:    ["MALL 51", "CG", "GGN51"],
+    ASR:       ["AMRITSAR", "ASR"],
+    AMH:       ["AMRITSAR", "ASR"],
+    AMR:       ["AMRITSAR", "ASR"],
+    AM:        ["AMRITSAR", "ASR"],
+    MIN:       ["LN"],
+    LP:        ["LP", "LB"],
+    RS:        ["RS"],
   };
 
   const jobs: OutletJob[] = [];

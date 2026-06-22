@@ -36,6 +36,7 @@ const BANK_ACCOUNTS: AccountRow[] = [
   { code: "HDFC723",  name: "DD",               accounts: ["50200048672723"] },
   { code: "HDFC739",  name: "Utility",          accounts: ["50200067780739"] },
   { code: "HDFC761",  name: "NP",               accounts: ["50200046398761"] },
+  { code: "HDFC793",  name: "EQUIPMENT",        accounts: ["50200073745793"] },
   { code: "HDFC801",  name: "ASR",              accounts: ["50200082329801"] },
   { code: "HDFC802",  name: "MR",               accounts: ["50200075737802"] },
   { code: "HDFC810",  name: "KB",               accounts: ["50200047521810"] },
@@ -53,6 +54,23 @@ const BANK_ACCOUNTS: AccountRow[] = [
  * embedded in a bank narration. Supports trailing/leading garbage by checking
  * substring containment from both directions.
  */
+/**
+ * Reverse lookup: given the LAST N digits of an HDFC account number
+ * (typically the 4 digits in a bank-filename like DWK_9146 → "9146"),
+ * find the outlet whose account ends with those digits. Used by batch
+ * mode to robustly pair bank files with BC ledgers.
+ */
+export function outletForAccountSuffix(suffix: string): string | null {
+  const s = String(suffix).replace(/\D/g, "");
+  if (s.length < 3) return null;
+  for (const a of BANK_ACCOUNTS) {
+    for (const acc of a.accounts) {
+      if (acc.endsWith(s)) return a.name;
+    }
+  }
+  return null;
+}
+
 export function outletForAccountNo(accountNo: string): string | null {
   const trimmed = String(accountNo).replace(/\s+/g, "");
   if (trimmed.length < 10) return null;

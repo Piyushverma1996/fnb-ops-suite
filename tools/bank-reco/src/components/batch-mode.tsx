@@ -156,7 +156,7 @@ export function BatchMode() {
               <tbody>
                 {jobs.map((j, i) => (
                   <tr key={i} className="border-t border-slate-100 dark:border-slate-800">
-                    <td className="px-2 py-1.5 font-mono font-semibold">{j.outletCode}</td>
+                    <td className="px-2 py-1.5 font-mono font-semibold">{j.displayCode}{j.outletCode !== j.displayCode && <span className="text-slate-400 ml-1">→ {j.outletCode}</span>}</td>
                     <td className="px-2 py-1.5 truncate max-w-xs" title={j.bankFile.name}>{j.bankFile.name}</td>
                     <td className="px-2 py-1.5 truncate max-w-xs" title={j.bcFile.name}>{j.bcFile.name}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{j.bcEntryCount ?? 0}</td>
@@ -219,7 +219,7 @@ export function BatchMode() {
                 <tbody>
                   {[...results].sort((a, b) => b.stats.matchPct - a.stats.matchPct).map((r, i) => (
                     <tr key={i} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                      <td className="px-2 py-2 font-mono font-semibold">{r.outletCode}</td>
+                      <td className="px-2 py-2 font-mono font-semibold">{r.displayCode}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{r.stats.totalBank}</td>
                       <td className="px-2 py-2 text-right tabular-nums">{r.stats.matchedBank}</td>
                       <td className="px-2 py-2 text-right tabular-nums">

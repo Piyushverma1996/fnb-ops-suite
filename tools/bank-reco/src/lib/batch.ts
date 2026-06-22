@@ -12,14 +12,18 @@ import {
 import { downloadReportToBlob } from "./export";
 
 export type OutletJob = {
-  outletCode: string;     // best-guess branch code, e.g. "DW", "CNSP"
+  outletCode: string;     // the ACTUAL branch code as it appears in BC
+                          // (e.g. "CNSP" for NSP, "MS" for Mussoorie). This
+                          // is what we filter BC entries by.
+  displayCode: string;    // what we show in UI: filename-derived (e.g. "NSP")
   bankFile: File;
   bcFile: File;
   bcEntryCount?: number;  // entries the BC file has for outletCode
 };
 
 export type BatchResult = {
-  outletCode: string;
+  outletCode: string;     // BC branch code used for filtering
+  displayCode: string;    // what to show in UI / Excel filename
   bankFileName: string;
   bcFileName: string;
   stats: MatchResult["stats"];
@@ -74,26 +78,42 @@ export async function pairFilesByOutlet(
     bcFiles.map(async f => ({ file: f, meta: await sniffBCLedger(f) })),
   );
 
+  // Edge-case aliases from the actual BC data: bank filename gives one code
+  // but BC stores transactions under a different branch code.
+  const FILENAME_TO_BC: Record<string, string[]> = {
+    DW: ["DWK"],
+    NSP: ["CNSP", "NSP"],
+    SN:  ["CSN", "SN"],
+    SDA: ["CSDA", "SDA"],
+    MUS: ["MS", "MUS"],
+    MU:  ["MS", "MU"],
+    GGN51: ["CG", "MALL 51", "GGN51"],
+    GGN54: ["GGN", "GGN54"],
+    ASR: ["AMRITSAR", "ASR"],
+    NB:  ["NB"],
+    MN:  ["MN"],
+    MT:  ["MT", "MN"],
+    CLB: ["CLB"],
+  };
+
   const jobs: OutletJob[] = [];
   for (const bank of bankFiles) {
-    const outlet = outletCodeFromBankFilename(bank.name);
-    // Find BC file whose branch list contains (close to) this outlet code
-    let best: { file: File; count: number } | null = null;
+    const filenameCode = outletCodeFromBankFilename(bank.name);
+    const candidates = FILENAME_TO_BC[filenameCode] ?? [filenameCode, `C${filenameCode}`];
+    // Find BC file whose branch list has the most entries for any candidate code
+    let best: { file: File; code: string; count: number } | null = null;
     for (const { file, meta } of bcMeta) {
-      const match = meta.branches.find(
-        b => b.code === outlet ||
-             b.code.startsWith(outlet) ||      // e.g. CNSP starts with NSP? No, but startsWith handles substring
-             outlet.startsWith(b.code) ||
-             b.code === `C${outlet}`,          // CNSP from NSP, CSN from SN, CSDA from SDA
-      );
-      if (match && (!best || match.count > best.count)) {
-        best = { file, count: match.count };
+      for (const cand of candidates) {
+        const hit = meta.branches.find(b => b.code === cand);
+        if (hit && (!best || hit.count > best.count)) {
+          best = { file, code: cand, count: hit.count };
+        }
       }
     }
     if (best) {
-      jobs.push({ outletCode: outlet, bankFile: bank, bcFile: best.file, bcEntryCount: best.count });
+      jobs.push({ outletCode: best.code, displayCode: filenameCode, bankFile: bank, bcFile: best.file, bcEntryCount: best.count });
     } else {
-      jobs.push({ outletCode: outlet, bankFile: bank, bcFile: bcMeta[0]?.file ?? bank, bcEntryCount: 0 });
+      jobs.push({ outletCode: filenameCode, displayCode: filenameCode, bankFile: bank, bcFile: bcMeta[0]?.file ?? bank, bcEntryCount: 0 });
     }
   }
   return jobs;
@@ -158,6 +178,7 @@ export async function runBatch(opts: RunBatchOpts): Promise<BatchResult[]> {
       if (bankF.length === 0 || bcF.length === 0) {
         out.push({
           outletCode: job.outletCode,
+          displayCode: job.displayCode,
           bankFileName: job.bankFile.name,
           bcFileName: job.bcFile.name,
           stats: { totalBank: bankF.length, totalBC: bcF.length, matchedBank: 0, matchedBC: 0, unmatchedBank: bankF.length, unmatchedBC: bcF.length, matchPct: 0 },
@@ -184,6 +205,7 @@ export async function runBatch(opts: RunBatchOpts): Promise<BatchResult[]> {
       for (const m of result.matches) tierCounts[m.tier] = (tierCounts[m.tier] ?? 0) + 1;
       out.push({
         outletCode: job.outletCode,
+        displayCode: job.displayCode,
         bankFileName: job.bankFile.name,
         bcFileName: job.bcFile.name,
         stats: result.stats,
@@ -195,6 +217,7 @@ export async function runBatch(opts: RunBatchOpts): Promise<BatchResult[]> {
     } catch (e) {
       out.push({
         outletCode: job.outletCode,
+        displayCode: job.displayCode,
         bankFileName: job.bankFile.name,
         bcFileName: job.bcFile.name,
         stats: { totalBank: 0, totalBC: 0, matchedBank: 0, matchedBC: 0, unmatchedBank: 0, unmatchedBC: 0, matchPct: 0 },
@@ -219,14 +242,15 @@ export async function packageBatchZip(results: BatchResult[]): Promise<Blob> {
 
   for (const r of results) {
     if (r.error) continue;
-    const blob = downloadReportToBlob(r.result, r.outletCode, r.dateFrom, r.dateTo, r.filteredBank);
-    zip.file(`BankReco_${r.outletCode}_${r.dateFrom}_${r.dateTo}.xlsx`, blob);
+    const blob = downloadReportToBlob(r.result, r.displayCode, r.dateFrom, r.dateTo, r.filteredBank);
+    zip.file(`BankReco_${r.displayCode}_${r.dateFrom}_${r.dateTo}.xlsx`, blob);
   }
 
   // Fleet summary workbook
   const fleetWB = XLSX.utils.book_new();
   const summaryRows = results.map(r => ({
-    "Outlet": r.outletCode,
+    "Outlet": r.displayCode,
+    "BC Branch": r.outletCode,
     "Bank File": r.bankFileName,
     "BC File": r.bcFileName,
     "Date From": r.dateFrom,
@@ -250,6 +274,7 @@ export async function packageBatchZip(results: BatchResult[]): Promise<Blob> {
   const fleetPct = totalBank ? Math.round((totalMatched / totalBank) * 1000) / 10 : 0;
   summaryRows.unshift({
     "Outlet": "═ FLEET TOTAL ═",
+    "BC Branch": "",
     "Bank File": "",
     "BC File": "",
     "Date From": "", "Date To": "",

@@ -128,6 +128,10 @@ export async function pairFilesByOutlet(
     CLB:       ["CLB"],
     MT:        ["MN", "MT"],
     "N BLOCK CP": ["NB"],
+    // HDFC321 is labeled "CP" in the bank-account master, but it's
+    // operationally used by the SS outlet (Sandoz CP P Block).
+    // SS_2321-imp.xls would otherwise label as "CP" and fail to pair.
+    CP:        ["SS"],
 
     // Legacy filename-prefix fallbacks (in case suffix lookup misses)
     DW:        ["DW", "DWK"],

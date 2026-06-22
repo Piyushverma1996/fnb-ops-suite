@@ -124,10 +124,10 @@ export async function pairFilesByOutlet(
     SS:        ["SS"],
     "HDFC-OD": ["HO"],                       // OD account stores transactions under HO
     "BK VENDOR CONTROL": ["HO"],
-    NB:        ["NB"],
+    NB:        ["CNB", "NB"],
     CLB:       ["CLB"],
     MT:        ["MN", "MT"],
-    "N BLOCK CP": ["NB"],
+    "N BLOCK CP": ["CNB", "NB"],
     // HDFC321 is labeled "CP" in the bank-account master, but it's
     // operationally used by the SS outlet (Sandoz CP P Block).
     // SS_2321-imp.xls would otherwise label as "CP" and fail to pair.
